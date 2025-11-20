@@ -191,6 +191,8 @@ export default function BookSmithAI() {
   const [step, setStep] = useState('interview');
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [isPolishing, setIsPolishing] = useState(false);
+  const [polishProgress, setPolishProgress] = useState({ current: 0, total: 0 });
   const [currentTheme, setCurrentTheme] = useState<keyof typeof THEMES>('coffee');
 
   // Theme Styles
@@ -495,6 +497,72 @@ export default function BookSmithAI() {
       }
       return part;
     });
+  };
+
+  // --- Sequential Polishing Logic ---
+  const handleSequentialPolish = async () => {
+    if (!bookStructure) return;
+    setIsPolishing(true);
+
+    // Flatten all subsections to create a sequential list
+    const allSubsections = [];
+    bookStructure.chapters.forEach((ch, cIdx) => {
+      ch.subsections.forEach((sub, sIdx) => {
+        allSubsections.push({ ...sub, cIdx, sIdx, key: `${ch.chapter_number}_${sub.sub_number}` });
+      });
+    });
+
+    setPolishProgress({ current: 0, total: allSubsections.length });
+
+    let previousContext = "";
+
+    try {
+      for (let i = 0; i < allSubsections.length; i++) {
+        const sub = allSubsections[i];
+        const currentText = subsectionContents[sub.key];
+
+        // Skip if no content (shouldn't happen if generated)
+        if (!currentText) continue;
+
+        // For the very first section, we don't have previous context, 
+        // but we still might want to "polish" it for tone consistency.
+        // Or we can skip the first one if the user only wants transitions.
+        // Let's polish everything for consistency.
+
+        const tonePrompt = getTonePrompt();
+
+        const response = await fetch('/api/polish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            currentText,
+            previousContext: previousContext.slice(-3000), // Pass last 3000 chars as context
+            tonePrompt,
+            instruction: i === 0 ? "첫 챕터의 시작입니다. 독자의 흥미를 끌 수 있도록 매력적으로 다듬어주세요." : "이전 내용과 자연스럽게 이어지도록 접속사와 흐름을 다듬어주세요."
+          })
+        });
+
+        if (!response.ok) throw new Error(`Polishing failed at ${sub.title}`);
+
+        const data = await response.json();
+        const refinedText = data.refinedText;
+
+        // Update content immediately
+        setSubsectionContents(prev => ({ ...prev, [sub.key]: refinedText }));
+
+        // Update context for next iteration
+        previousContext += "\n\n" + refinedText;
+
+        // Update progress
+        setPolishProgress(prev => ({ ...prev, current: i + 1 }));
+      }
+      alert("전체 윤문 작업이 완료되었습니다!");
+    } catch (e) {
+      console.error(e);
+      alert("윤문 작업 중 오류가 발생했습니다: " + e.message);
+    } finally {
+      setIsPolishing(false);
+    }
   };
 
   // --- Export Functions ---
@@ -973,6 +1041,38 @@ export default function BookSmithAI() {
                   <button onClick={handlePrintPDF} className="w-full bg-white text-slate-900 hover:bg-slate-100 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2">
                     <Printer size={16} /> 인쇄 / PDF 저장
                   </button>
+                </div>
+              )}
+
+              {/* Polishing UI */}
+              {(step === 'done' || step === 'writing') && (
+                <div className={`mt-4 border-t pt-4 ${theme.border}`}>
+                  <h4 className="font-bold text-sm mb-2 flex items-center gap-2">
+                    <Sparkles size={14} className="text-amber-500" /> 전체 윤문 (Polishing)
+                  </h4>
+                  <p className="text-xs opacity-70 mb-3">
+                    앞 챕터의 내용을 바탕으로 뒤 챕터를 다듬어, 책 전체의 연결성과 일관성을 높입니다.
+                  </p>
+
+                  {isPolishing ? (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs">
+                        <span>진행 중...</span>
+                        <span>{Math.round((polishProgress.current / polishProgress.total) * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                        <div className="bg-amber-500 h-2 rounded-full transition-all duration-300" style={{ width: `${(polishProgress.current / polishProgress.total) * 100}%` }}></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleSequentialPolish}
+                      disabled={loading || isPolishing}
+                      className={`w-full py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 border transition-colors ${theme.button === 'bg-slate-900 text-white' ? 'bg-amber-600 text-white border-transparent hover:bg-amber-700' : 'bg-amber-100 text-amber-900 border-amber-200 hover:bg-amber-200'}`}
+                    >
+                      <Wand2 size={14} /> 순차적 윤문 시작하기
+                    </button>
+                  )}
                 </div>
               )}
             </div>
