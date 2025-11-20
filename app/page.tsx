@@ -191,7 +191,7 @@ export default function BookSmithAI() {
   const [step, setStep] = useState('interview');
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState<keyof typeof THEMES>('midnight');
+  const [currentTheme, setCurrentTheme] = useState<keyof typeof THEMES>('coffee');
 
   // Theme Styles
   const theme = THEMES[currentTheme];
