@@ -13,11 +13,11 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const { prompt, systemInstruction = "" } = await req.json();
+        const { prompt, messages, systemInstruction = "", generationConfig } = await req.json();
 
-        if (!prompt) {
+        if (!prompt && (!messages || messages.length === 0)) {
             return new Response(
-                JSON.stringify({ error: "Prompt is required" }),
+                JSON.stringify({ error: "Prompt or messages are required" }),
                 { status: 400, headers: { "Content-Type": "application/json" } }
             );
         }
@@ -32,12 +32,23 @@ export async function POST(req: NextRequest) {
         const stream = new ReadableStream({
             async start(controller) {
                 try {
+                    let contents = [];
+                    if (messages && messages.length > 0) {
+                        contents = messages.map((m: any) => ({
+                            role: m.role === 'assistant' ? 'model' : 'user',
+                            parts: [{ text: m.content }]
+                        }));
+                    } else {
+                        contents = [{ role: "user", parts: [{ text: prompt }] }];
+                    }
+
                     const result = await model.generateContentStream({
-                        contents: [{ role: "user", parts: [{ text: prompt }] }],
+                        contents,
                         systemInstruction: systemInstruction ? {
                             role: "system",
                             parts: [{ text: systemInstruction }]
                         } : undefined,
+                        generationConfig,
                     });
 
                     for await (const chunk of result.stream) {

@@ -95,6 +95,7 @@ const TONE_FACTORS = {
 const SYSTEM_PROMPTS = {
   interviewer: (tonePrompt: string) => `
   당신은 전문 출판 기획자입니다. 
+  [중요: 절대 사용자 역할을 대신하여 답변을 지어내지 마세요. 오직 당신의 질문만 출력하고 멈추세요.] 
   [현재 설정된 집필 톤앤매너]
   ${tonePrompt}
   
@@ -308,11 +309,15 @@ export default function BookSmithAI() {
     return data.text;
   };
 
-  const callGeminiStream = async (prompt: string, systemInstruction = "", onUpdate: (text: string) => void) => {
+  const callGeminiStream = async (prompt: string | any[], systemInstruction = "", onUpdate: (text: string) => void, generationConfig?: any) => {
+    const body = Array.isArray(prompt)
+      ? { messages: prompt, systemInstruction, generationConfig }
+      : { prompt, systemInstruction, generationConfig };
+
     const response = await fetch('/api/generate-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, systemInstruction })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -844,10 +849,12 @@ export default function BookSmithAI() {
     setLoading(true);
     try {
       const tonePrompt = getTonePrompt();
-      const historyText = messages.concat(userMsg).map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`).join('\n');
       setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
+      const historyMessages = [...messages, userMsg];
+
       const finalResponse = await callGeminiStream(
-        historyText,
+        historyMessages,
         SYSTEM_PROMPTS.interviewer(tonePrompt),
         (currentText) => { setMessages(prev => { const newMsgs = [...prev]; newMsgs[newMsgs.length - 1].content = currentText; return newMsgs; }); }
       );
@@ -994,10 +1001,13 @@ export default function BookSmithAI() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <main className="flex-1 p-4 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
 
         {/* Left Panel */}
-        <div className={`sidebar-panel lg:col-span-5 flex flex-col h-[calc(100vh-100px)] gap-4 transition-all ${step === 'done' ? 'hidden lg:flex' : ''}`}>
+        <div className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
+            ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
+            : 'lg:col-span-5'
+          } ${step === 'done' ? 'hidden lg:flex' : ''}`}>
           <div className={`flex justify-between p-3 rounded-lg border text-xs font-mono ${theme.panel} ${theme.border} opacity-70`}>
             <span className={step === 'interview' ? 'font-bold underline' : ''}>1.Design</span>
             <span className={step === 'outline' ? 'font-bold underline' : ''}>2.Structure</span>
@@ -1298,164 +1308,166 @@ export default function BookSmithAI() {
         </div>
 
         {/* Right Panel: Preview Area */}
-        <div className={`lg:col-span-7 rounded-xl shadow-2xl flex flex-col h-[calc(100vh-100px)] overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText}`}>
-          <div className={`p-4 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
-            <div className="flex items-center gap-2">
-              <FileText size={18} className="opacity-50" />
-              <span className="font-serif font-bold">Manuscript Preview</span>
-            </div>
-            <div className="flex items-center gap-3 text-xs font-mono opacity-50">
-              {step === 'done' && (
-                <button onClick={handlePrintPDF} className="flex items-center gap-1 hover:text-indigo-600">
-                  <Printer size={14} /> Print/PDF
-                </button>
-              )}
-              <span>|</span>
-              <span>A4 {Math.round(progress.current * 0.8)} pages est.</span>
-            </div>
-          </div>
-
-          <div id="printable-area" className={`flex-1 overflow-y-auto p-12 print:p-0 print:overflow-visible ${theme.previewText}`}>
-            {bookStructure ? (
-              <div className="max-w-3xl mx-auto space-y-12 print:max-w-none">
-                {coverImage && (
-                  <div className="mb-12 print:break-after-page flex flex-col items-center">
-                    <div
-                      className="shadow-2xl rounded overflow-hidden w-64 border-8 border-white relative"
-                      style={{ aspectRatio: '1 / 1.48' }} // Enforce 1:1.48 ratio
-                    >
-                      <img src={coverImage} alt="Book Cover" className="w-full h-full object-cover" />
-                    </div>
-                    <p className="text-xs opacity-40 mt-2">AI generated cover based on book concept</p>
-                  </div>
+        {step !== 'interview' && (
+          <div className={`lg:col-span-7 rounded-xl shadow-2xl flex flex-col h-[calc(100vh-100px)] overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}>
+            <div className={`p-4 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
+              <div className="flex items-center gap-2">
+                <FileText size={18} className="opacity-50" />
+                <span className="font-serif font-bold">Manuscript Preview</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs font-mono opacity-50">
+                {step === 'done' && (
+                  <button onClick={handlePrintPDF} className="flex items-center gap-1 hover:text-indigo-600">
+                    <Printer size={14} /> Print/PDF
+                  </button>
                 )}
-
-                <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
-                  <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6">{bookStructure.title}</h1>
-                  <p className="text-2xl italic font-serif opacity-70">{bookStructure.concept}</p>
-                  <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-sans font-bold uppercase tracking-widest ${theme.accent}`}>
-                    <span>Written by AI Book Smith</span>
-                    <span>•</span>
-                    <span>{TONE_FACTORS.roles.find(r => r.id === toneSettings.role).label}</span>
-                  </div>
-                </div>
-
-                {bookStructure.chapters.map((ch) => (
-                  <div key={ch.chapter_number} className="chapter-block print:break-before-page">
-                    <div className="mb-16 mt-8 text-center">
-                      <span className={`inline-block text-xs font-bold tracking-[0.3em] uppercase opacity-40 border-b pb-2 mb-4 ${theme.border}`}>Chapter {ch.chapter_number}</span>
-                      <h2 className="text-4xl font-serif font-bold">{ch.title}</h2>
-                    </div>
-
-                    {ch.subsections.map((sub) => {
-                      const key = `${ch.chapter_number}_${sub.sub_number}`;
-                      const content = subsectionContents[key];
-                      const isEditingThis = editingSection?.key === key;
-
-                      return (
-                        <div key={sub.sub_number} className="mb-12 subsection-block relative group">
-                          <h3 className="text-xl font-serif font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
-                            <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
-                          </h3>
-
-                          {/* AI Edit Toolbar - Always visible with low opacity, full on hover */}
-                          {content && !isEditingThis && (
-                            <div className={`absolute right-0 top-0 opacity-50 hover:opacity-100 transition-opacity shadow-md rounded-lg border p-1 flex gap-1 print:hidden ${theme.previewBg} ${theme.border} bg-opacity-90 backdrop-blur`}>
-                              <button onClick={() => handleAIEdit(key, "내용을 더 풍부하게 확장해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="확장">
-                                <Wand2 size={14} />
-                              </button>
-                              <button onClick={() => handleAIEdit(key, "내용을 간결하게 요약해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="요약">
-                                <FileText size={14} />
-                              </button>
-                              <button onClick={() => handleAIEdit(key, "문법과 문체를 매끄럽게 다듬어줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="윤문">
-                                <Sparkles size={14} />
-                              </button>
-                            </div>
-                          )}
-
-                          {isEditingThis ? (
-                            <div className="p-8 border-2 border-indigo-100 rounded-lg bg-indigo-50/30 flex items-center justify-center gap-3 text-indigo-600 animate-pulse">
-                              <Wand2 className="animate-bounce" /> AI가 문장을 다듬고 있습니다...
-                            </div>
-                          ) : content ? (
-                            <div className="prose prose-lg max-w-none prose-p:leading-loose">
-                              {renderMarkdown(content)}
-                            </div>
-                          ) : (
-                            <div className="p-6 border border-dashed rounded text-center opacity-40 text-sm py-12 print:hidden">
-                              집필 대기 중... ({sub.title})
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))}
+                <span>|</span>
+                <span>A4 {Math.round(progress.current * 0.8)} pages est.</span>
               </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 print:hidden">
-                <BookOpen size={48} />
-                <p>왼쪽 패널에서 기획을 시작하면<br />여기에 원고가 실시간으로 표시됩니다.</p>
-              </div>
-            )}
+            </div>
 
-            {/* Persona Chat Overlay Button */}
-            {(step === 'writing' || step === 'done') && (
-              <div className="absolute bottom-6 right-6 z-40 print:hidden">
-                <button
-                  onClick={() => {
-                    setShowPersonaChat(!showPersonaChat);
-                    if (personaChatMessages.length === 0) {
-                      setPersonaChatMessages([{ role: 'model', content: "안녕하세요! 집필하시느라 고생이 많으시네요. 어떤 점이 고민되시나요?" }]);
-                    }
-                  }}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-full shadow-xl flex items-center gap-2 transition-transform hover:scale-105"
-                >
-                  <User size={24} />
-                  {showPersonaChat ? "대화 닫기" : "페르소나와 대화하기"}
-                </button>
-              </div>
-            )}
-
-            {/* Persona Chat Window */}
-            {showPersonaChat && (
-              <div className="absolute bottom-20 right-6 w-80 h-96 bg-white rounded-xl shadow-2xl border flex flex-col overflow-hidden z-50 animate-fade-in-up">
-                <div className="bg-indigo-600 text-white p-3 flex justify-between items-center">
-                  <span className="font-bold text-sm flex items-center gap-2"><Sparkles size={14} /> AI 페르소나</span>
-                  <button onClick={() => setShowPersonaChat(false)}><X size={16} /></button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
-                  {personaChatMessages.map((m, i) => (
-                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] p-2 rounded-lg text-sm ${m.role === 'user' ? 'bg-indigo-500 text-white rounded-br-none' : 'bg-white border text-slate-800 rounded-bl-none shadow-sm'}`}>
-                        {m.content}
+            <div id="printable-area" className={`flex-1 overflow-y-auto p-12 print:p-0 print:overflow-visible ${theme.previewText}`}>
+              {bookStructure ? (
+                <div className="max-w-3xl mx-auto space-y-12 print:max-w-none">
+                  {coverImage && (
+                    <div className="mb-12 print:break-after-page flex flex-col items-center">
+                      <div
+                        className="shadow-2xl rounded overflow-hidden w-64 border-8 border-white relative"
+                        style={{ aspectRatio: '1 / 1.48' }} // Enforce 1:1.48 ratio
+                      >
+                        <img src={coverImage} alt="Book Cover" className="w-full h-full object-cover" />
                       </div>
-                    </div>
-                  ))}
-                  {isChatLoading && (
-                    <div className="flex justify-start">
-                      <div className="bg-white border p-2 rounded-lg rounded-bl-none shadow-sm">
-                        <Loader2 className="animate-spin text-indigo-500" size={16} />
-                      </div>
+                      <p className="text-xs opacity-40 mt-2">AI generated cover based on book concept</p>
                     </div>
                   )}
+
+                  <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
+                    <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6">{bookStructure.title}</h1>
+                    <p className="text-2xl italic font-serif opacity-70">{bookStructure.concept}</p>
+                    <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-sans font-bold uppercase tracking-widest ${theme.accent}`}>
+                      <span>Written by AI Book Smith</span>
+                      <span>•</span>
+                      <span>{TONE_FACTORS.roles.find(r => r.id === toneSettings.role).label}</span>
+                    </div>
+                  </div>
+
+                  {bookStructure.chapters.map((ch) => (
+                    <div key={ch.chapter_number} className="chapter-block print:break-before-page">
+                      <div className="mb-16 mt-8 text-center">
+                        <span className={`inline-block text-xs font-bold tracking-[0.3em] uppercase opacity-40 border-b pb-2 mb-4 ${theme.border}`}>Chapter {ch.chapter_number}</span>
+                        <h2 className="text-4xl font-serif font-bold">{ch.title}</h2>
+                      </div>
+
+                      {ch.subsections.map((sub) => {
+                        const key = `${ch.chapter_number}_${sub.sub_number}`;
+                        const content = subsectionContents[key];
+                        const isEditingThis = editingSection?.key === key;
+
+                        return (
+                          <div key={sub.sub_number} className="mb-12 subsection-block relative group">
+                            <h3 className="text-xl font-serif font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
+                              <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
+                            </h3>
+
+                            {/* AI Edit Toolbar - Always visible with low opacity, full on hover */}
+                            {content && !isEditingThis && (
+                              <div className={`absolute right-0 top-0 opacity-50 hover:opacity-100 transition-opacity shadow-md rounded-lg border p-1 flex gap-1 print:hidden ${theme.previewBg} ${theme.border} bg-opacity-90 backdrop-blur`}>
+                                <button onClick={() => handleAIEdit(key, "내용을 더 풍부하게 확장해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="확장">
+                                  <Wand2 size={14} />
+                                </button>
+                                <button onClick={() => handleAIEdit(key, "내용을 간결하게 요약해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="요약">
+                                  <FileText size={14} />
+                                </button>
+                                <button onClick={() => handleAIEdit(key, "문법과 문체를 매끄럽게 다듬어줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="윤문">
+                                  <Sparkles size={14} />
+                                </button>
+                              </div>
+                            )}
+
+                            {isEditingThis ? (
+                              <div className="p-8 border-2 border-indigo-100 rounded-lg bg-indigo-50/30 flex items-center justify-center gap-3 text-indigo-600 animate-pulse">
+                                <Wand2 className="animate-bounce" /> AI가 문장을 다듬고 있습니다...
+                              </div>
+                            ) : content ? (
+                              <div className="prose prose-lg max-w-none prose-p:leading-loose">
+                                {renderMarkdown(content)}
+                              </div>
+                            ) : (
+                              <div className="p-6 border border-dashed rounded text-center opacity-40 text-sm py-12 print:hidden">
+                                집필 대기 중... ({sub.title})
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
                 </div>
-                <form onSubmit={handlePersonaChat} className="p-2 border-t bg-white flex gap-2">
-                  <input
-                    type="text"
-                    value={personaChatInput}
-                    onChange={(e) => setPersonaChatInput(e.target.value)}
-                    placeholder="메시지를 입력하세요..."
-                    className="flex-1 text-sm border rounded px-2 py-1 outline-none focus:border-indigo-500"
-                  />
-                  <button type="submit" disabled={isChatLoading} className="bg-indigo-600 text-white p-2 rounded hover:bg-indigo-700 disabled:opacity-50">
-                    <Send size={16} />
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 print:hidden">
+                  <BookOpen size={48} />
+                  <p>왼쪽 패널에서 기획을 시작하면<br />여기에 원고가 실시간으로 표시됩니다.</p>
+                </div>
+              )}
+
+              {/* Persona Chat Overlay Button */}
+              {(step === 'writing' || step === 'done') && (
+                <div className="absolute bottom-6 right-6 z-40 print:hidden">
+                  <button
+                    onClick={() => {
+                      setShowPersonaChat(!showPersonaChat);
+                      if (personaChatMessages.length === 0) {
+                        setPersonaChatMessages([{ role: 'model', content: "안녕하세요! 집필하시느라 고생이 많으시네요. 어떤 점이 고민되시나요?" }]);
+                      }
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-full shadow-xl flex items-center gap-2 transition-transform hover:scale-105"
+                  >
+                    <User size={24} />
+                    {showPersonaChat ? "대화 닫기" : "페르소나와 대화하기"}
                   </button>
-                </form>
-              </div>
-            )}
+                </div>
+              )}
+
+              {/* Persona Chat Window */}
+              {showPersonaChat && (
+                <div className="absolute bottom-20 right-6 w-80 h-96 bg-white rounded-xl shadow-2xl border flex flex-col overflow-hidden z-50 animate-fade-in-up">
+                  <div className="bg-indigo-600 text-white p-3 flex justify-between items-center">
+                    <span className="font-bold text-sm flex items-center gap-2"><Sparkles size={14} /> AI 페르소나</span>
+                    <button onClick={() => setShowPersonaChat(false)}><X size={16} /></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
+                    {personaChatMessages.map((m, i) => (
+                      <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] p-2 rounded-lg text-sm ${m.role === 'user' ? 'bg-indigo-500 text-white rounded-br-none' : 'bg-white border text-slate-800 rounded-bl-none shadow-sm'}`}>
+                          {m.content}
+                        </div>
+                      </div>
+                    ))}
+                    {isChatLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-white border p-2 rounded-lg rounded-bl-none shadow-sm">
+                          <Loader2 className="animate-spin text-indigo-500" size={16} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <form onSubmit={handlePersonaChat} className="p-2 border-t bg-white flex gap-2">
+                    <input
+                      type="text"
+                      value={personaChatInput}
+                      onChange={(e) => setPersonaChatInput(e.target.value)}
+                      placeholder="메시지를 입력하세요..."
+                      className="flex-1 text-sm border rounded px-2 py-1 outline-none focus:border-indigo-500"
+                    />
+                    <button type="submit" disabled={isChatLoading} className="bg-indigo-600 text-white p-2 rounded hover:bg-indigo-700 disabled:opacity-50">
+                      <Send size={16} />
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </main>
     </div>
   );
