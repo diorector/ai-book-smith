@@ -260,10 +260,70 @@ export default function BookSmithAI() {
   // New Features State
   const [coverImage, setCoverImage] = useState(null);
   const [generatingCover, setGeneratingCover] = useState(false);
+  const [generatingCoverOptionId, setGeneratingCoverOptionId] = useState(null);
+  const [coverConcepts, setCoverConcepts] = useState(null);
+  const [coverConceptsLoading, setCoverConceptsLoading] = useState(false);
+  const [coverPromptUsed, setCoverPromptUsed] = useState('');
+  const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
   const [editingSection, setEditingSection] = useState(null);
   const [showThemeSelector, setShowThemeSelector] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const STORAGE_KEY = 'ai-book-smith-state';
+
+  // --- Persistence Logic ---
+  // Load state from localStorage on mount
+  useEffect(() => {
+    const savedState = localStorage.getItem(STORAGE_KEY);
+    if (savedState) {
+      try {
+        const parsed = JSON.parse(savedState);
+        if (parsed.step) setStep(parsed.step);
+        if (parsed.messages) setMessages(parsed.messages);
+        if (parsed.readyForOutline) setReadyForOutline(parsed.readyForOutline);
+        if (parsed.toneSettings) setToneSettings(parsed.toneSettings);
+        if (parsed.bookStructure) setBookStructure(parsed.bookStructure);
+        if (parsed.subsectionContents) setSubsectionContents(parsed.subsectionContents);
+        if (parsed.progress) setProgress(parsed.progress);
+        if (parsed.coverImage) setCoverImage(parsed.coverImage);
+        if (parsed.coverConcepts) setCoverConcepts(parsed.coverConcepts);
+        if (parsed.coverPromptUsed) setCoverPromptUsed(parsed.coverPromptUsed);
+        if (parsed.currentTheme) setCurrentTheme(parsed.currentTheme);
+        if (parsed.includeIntroOutro !== undefined) setIncludeIntroOutro(parsed.includeIntroOutro);
+      } catch (e) {
+        console.error("Failed to load state:", e);
+      }
+    }
+  }, []);
+
+  // Save state to localStorage whenever relevant changes occur
+  useEffect(() => {
+    // Skip saving if it's the initial empty state and we haven't loaded yet
+    // (Simple way: if messages has more than initial or step is changed)
+    const stateToSave = {
+      step,
+      messages,
+      readyForOutline,
+      toneSettings,
+      bookStructure,
+      subsectionContents,
+      progress,
+      coverImage,
+      coverConcepts,
+      coverPromptUsed,
+      currentTheme,
+      includeIntroOutro
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro]);
+
+  const handleReset = () => {
+    if (window.confirm("진행 중인 모든 작업이 삭제됩니다. 정말 새로 시작하시겠습니까?")) {
+      localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    }
+  };
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -409,19 +469,46 @@ export default function BookSmithAI() {
     }
   };
 
-  // Image Generation (Imagen 4) - Updated for Textless & Ratio
-  const generateCoverImage = async () => {
+  // Cover: 3 concepts -> user picks -> generate image (Gemini 3 Pro Image Preview)
+  const generateCoverConcepts = async () => {
     if (!bookStructure) return;
-    setGeneratingCover(true);
+    setCoverConceptsLoading(true);
     try {
-      const visualStyle = getToneVisualPrompt();
-      // Prompt: No text, pure art
-      const imagePrompt = `A high quality book cover illustration art without any text. Concept: ${bookStructure.concept}. Style: ${visualStyle}. Visual art only, no title, no words, textless.`;
+      const response = await fetch('/api/cover/concepts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: bookStructure.title,
+          description: bookStructure.concept,
+          targetAudience: bookStructure.target_audience || '',
+        })
+      });
 
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Cover concept error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setCoverConcepts(data);
+      setIsCoverModalOpen(true);
+    } catch (e: any) {
+      alert("표지 컨셉 생성 실패: " + e.message);
+      console.error(e);
+    } finally {
+      setCoverConceptsLoading(false);
+    }
+  };
+
+  const generateCoverImageFromConcept = async (option) => {
+    if (!option?.promptEnglish) return;
+    setGeneratingCover(true);
+    setGeneratingCoverOptionId(option?.id || null);
+    try {
       const response = await fetch('/api/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: imagePrompt })
+        body: JSON.stringify({ prompt: option.promptEnglish })
       });
 
       if (!response.ok) {
@@ -432,12 +519,15 @@ export default function BookSmithAI() {
       const data = await response.json();
       if (data.imageUrl) {
         setCoverImage(data.imageUrl);
+        setCoverPromptUsed(option.promptEnglish);
+        setIsCoverModalOpen(false);
       }
     } catch (e: any) {
       alert("이미지 생성 실패: " + e.message);
       console.error(e);
     } finally {
       setGeneratingCover(false);
+      setGeneratingCoverOptionId(null);
     }
   };
 
@@ -735,101 +825,315 @@ export default function BookSmithAI() {
     if (!bookStructure) return;
     setExporting(true);
     try {
-      await Promise.all([
-        loadScript('https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js'),
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js')
-      ]);
-      // @ts-ignore
-      const htmlDocx = window.htmlDocx;
+      // WordprocessingML 기반 DOCX 생성 (AltChunk/MHT 없음)
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js');
       // @ts-ignore
       const saveAs = window.saveAs;
 
-      let content = `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
-        body { font-family: 'Malgun Gothic', 'Batang', serif; line-height: 1.6; }
-        h1 { font-size: 24pt; font-weight: bold; text-align: center; page-break-before: always; }
-        h2 { font-size: 18pt; font-weight: bold; margin-top: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        h3 { font-size: 14pt; font-weight: bold; margin-top: 15px; color: #333; }
-        p { font-size: 11pt; margin-bottom: 10px; text-align: justify; }
-        blockquote { font-style: italic; color: #555; background: #f9f9f9; padding: 10px; border-left: 3px solid #ccc; margin: 10px 20px; }
-        table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-        th { background-color: #f2f2f2; font-weight: bold; }
-        td, th { border: 1px solid #000; padding: 8px; text-align: left; }
-      </style></head><body>`;
+      const docx = await import('docx');
+      const {
+        Document,
+        Packer,
+        Paragraph,
+        TextRun,
+        HeadingLevel,
+        AlignmentType,
+        PageBreak,
+        Table,
+        TableRow,
+        TableCell,
+        WidthType,
+        BorderStyle,
+        LevelFormat,
+      } = docx;
 
-      // Title Page
-      content += `
-      <div style="text-align:center; padding-top: 100px; padding-bottom: 100px; page-break-after: always;">
-        <h1 style="font-size: 36pt; border: none; page-break-before: auto;">${bookStructure.title}</h1>
-        <p style="font-size: 18pt; margin-top: 20px;">${bookStructure.concept}</p>
-        <p style="margin-top: 100px; font-size: 12pt; color: #888;">Generated by AI Book Smith</p>
-      </div>
-      `;
+      const safeText = (s) => (s ?? '').toString();
 
+      const makeRunsFromBold = (text) => {
+        const input = safeText(text);
+        const runs = [];
+
+        // handle line breaks inside a paragraph
+        const pushTextWithBreaks = (t, bold = false) => {
+          const parts = safeText(t).split('\n');
+          parts.forEach((p, idx) => {
+            if (idx > 0) runs.push(new TextRun({ text: '', break: 1 }));
+            if (p) runs.push(new TextRun({ text: p, bold }));
+          });
+        };
+
+        let i = 0;
+        while (i < input.length) {
+          const start = input.indexOf('**', i);
+          if (start === -1) {
+            pushTextWithBreaks(input.slice(i), false);
+            break;
+          }
+          const end = input.indexOf('**', start + 2);
+          if (end === -1) {
+            pushTextWithBreaks(input.slice(i), false);
+            break;
+          }
+          pushTextWithBreaks(input.slice(i, start), false);
+          pushTextWithBreaks(input.slice(start + 2, end), true);
+          i = end + 2;
+        }
+        return runs.length ? runs : [new TextRun({ text: '' })];
+      };
+
+      const cleanMarkdownLikeText = (raw) =>
+        safeText(raw)
+          .replace(/\$\$/g, '')
+          .replace(/\\text\{([^}]+)\}/g, '$1')
+          .replace(/\\[a-zA-Z]+/g, '');
+
+      const isTableSeparatorRow = (line) => {
+        const cols = line.split('|').map((c) => c.trim()).filter(Boolean);
+        return cols.length > 0 && cols.every((c) => /^-+$/.test(c));
+      };
+
+      const parsePipeTable = (block) => {
+        const lines = safeText(block)
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.startsWith('|'));
+        if (!lines.length) return null;
+        const rows = [];
+        for (const ln of lines) {
+          if (isTableSeparatorRow(ln)) continue;
+          const cols = ln.split('|').map((c) => c.trim()).filter(Boolean);
+          if (cols.length) rows.push(cols);
+        }
+        if (!rows.length) return null;
+        return rows;
+      };
+
+      const buildTable = (rows) => {
+        const maxCols = Math.max(...rows.map((r) => r.length));
+        const normRows = rows.map((r) => {
+          const out = [...r];
+          while (out.length < maxCols) out.push('');
+          return out;
+        });
+
+        const tableRows = normRows.map((r, idx) => {
+          const isHeader = idx === 0;
+          return new TableRow({
+            children: r.map((cellText) => {
+              const runs = makeRunsFromBold(cellText);
+              if (isHeader) {
+                // header bold 강화
+                runs.forEach((run) => (run.bold = true));
+              }
+              return new TableCell({
+                width: { size: Math.floor(100 / maxCols), type: WidthType.PERCENTAGE },
+                children: [
+                  new Paragraph({
+                    children: runs,
+                  }),
+                ],
+              });
+            }),
+          });
+        });
+
+        return new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: tableRows,
+        });
+      };
+
+      const children = [];
+
+      // Numbering config (ordered list)
+      const numberingConfig = [
+        {
+          reference: 'abs-numbered',
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: '%1.',
+              alignment: AlignmentType.START,
+            },
+          ],
+        },
+        {
+          reference: 'abs-bullets',
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.BULLET,
+              text: '•',
+              alignment: AlignmentType.START,
+            },
+          ],
+        },
+      ];
+
+      // Title page
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 300 },
+          children: [
+            new TextRun({ text: safeText(bookStructure.title), bold: true, size: 56 }),
+          ],
+        })
+      );
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 400 },
+          children: [new TextRun({ text: safeText(bookStructure.concept), size: 28 })],
+        })
+      );
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'Generated by AI Book Smith', color: '888888' })],
+        })
+      );
+      children.push(new Paragraph({ children: [new PageBreak()] }));
+
+      // Chapters
       bookStructure.chapters.forEach((ch, idx) => {
-        content += `<h1>Chapter ${ch.chapter_number}. ${ch.title}</h1>`;
-        ch.subsections.forEach(sub => {
+        if (idx > 0) {
+          children.push(new Paragraph({ children: [new PageBreak()] }));
+        }
+        children.push(
+          new Paragraph({
+            text: `Chapter ${ch.chapter_number}. ${safeText(ch.title)}`,
+            heading: HeadingLevel.HEADING_1,
+          })
+        );
+
+        ch.subsections.forEach((sub) => {
           const key = `${ch.chapter_number}_${sub.sub_number}`;
-          const rawContent = subsectionContents[key] || "";
+          const rawContent = subsectionContents[key] || '';
+          children.push(
+            new Paragraph({
+              text: `§ ${safeText(sub.title)}`,
+              heading: HeadingLevel.HEADING_2,
+            })
+          );
 
-          let clean = rawContent
-            .replace(/\$\$/g, '')
-            .replace(/\\text\{([^}]+)\}/g, '$1')
-            .replace(/\\[a-zA-Z]+/g, '');
+          const clean = cleanMarkdownLikeText(rawContent);
+          const blocks = clean.split(/\n\s*\n/);
 
-          // Split by double newline to identify paragraphs/blocks
-          const paragraphs = clean.split(/\n\s*\n/);
-          let sectionHtml = "";
-
-          paragraphs.forEach(p => {
-            const trimmed = p.trim();
+          blocks.forEach((b) => {
+            const trimmed = b.trim();
             if (!trimmed) return;
 
+            // Table
             if (trimmed.startsWith('|')) {
-              // Table handling
-              const rows = trimmed.split('\n');
-              let tableHtml = '<table>';
-              rows.forEach((r, i) => {
-                const cols = r.split('|').filter(c => c.trim() !== '');
-                // Skip separator row (e.g., |---|---|)
-                if (cols.length > 0 && cols[0].includes('---')) return;
-
-                tableHtml += '<tr>';
-                cols.forEach(c => {
-                  tableHtml += `<${i === 0 ? 'th' : 'td'}>${c.trim().replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')}</${i === 0 ? 'th' : 'td'}>`;
-                });
-                tableHtml += '</tr>';
-              });
-              tableHtml += '</table>';
-              sectionHtml += tableHtml;
-            } else if (trimmed.startsWith('>')) {
-              const quoteContent = trimmed.replace(/^>\s*/gm, '').replace(/\n/g, '<br/>');
-              sectionHtml += `<blockquote>${quoteContent}</blockquote>`;
-            } else if (trimmed.startsWith('###')) {
-              sectionHtml += `<h3>${trimmed.replace(/^###\s*/, '')}</h3>`;
-            } else if (trimmed.startsWith('##')) {
-              sectionHtml += `<h2>${trimmed.replace(/^##\s*/, '')}</h2>`;
-            } else {
-              // List Items
-              if (trimmed.match(/^[-*]\s/)) {
-                sectionHtml += '<ul>' + trimmed.split('\n').map(line => `<li>${line.replace(/^[-*]\s/, '').replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')}</li>`).join('') + '</ul>';
-              } else if (trimmed.match(/^\d+\.\s/)) {
-                sectionHtml += '<ol>' + trimmed.split('\n').map(line => `<li>${line.replace(/^\d+\.\s/, '').replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')}</li>`).join('') + '</ol>';
-              } else {
-                // Normal Paragraph
-                let text = trimmed.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br/>');
-                sectionHtml += `<p>${text}</p>`;
+              const tableRows = parsePipeTable(trimmed);
+              if (tableRows) {
+                children.push(buildTable(tableRows));
+                children.push(new Paragraph({ text: '' }));
+                return;
               }
             }
-          });
 
-          content += `<h2>§ ${sub.title}</h2>${sectionHtml}`;
+            // Blockquote
+            if (trimmed.startsWith('>')) {
+              const quoteLines = trimmed.split('\n').map((l) => l.replace(/^>\s?/, ''));
+              quoteLines.forEach((ql) => {
+                const q = ql.trim();
+                if (!q) return;
+                children.push(
+                  new Paragraph({
+                    indent: { left: 720 },
+                    border: {
+                      left: {
+                        color: 'CCCCCC',
+                        size: 6,
+                        space: 8,
+                        style: BorderStyle.SINGLE,
+                      },
+                    },
+                    children: makeRunsFromBold(q).map((r) => {
+                      r.italics = true;
+                      return r;
+                    }),
+                  })
+                );
+              });
+              children.push(new Paragraph({ text: '' }));
+              return;
+            }
+
+            // Headings inside section
+            if (trimmed.startsWith('### ')) {
+              children.push(
+                new Paragraph({
+                  text: trimmed.replace(/^###\s*/, ''),
+                  heading: HeadingLevel.HEADING_3,
+                })
+              );
+              return;
+            }
+            if (trimmed.startsWith('## ')) {
+              children.push(
+                new Paragraph({
+                  text: trimmed.replace(/^##\s*/, ''),
+                  heading: HeadingLevel.HEADING_3,
+                })
+              );
+              return;
+            }
+
+            // Unordered list
+            if (trimmed.match(/^[-*]\s/)) {
+              trimmed.split('\n').forEach((line) => {
+                const item = line.replace(/^[-*]\s/, '').trim();
+                if (!item) return;
+                children.push(
+                  new Paragraph({
+                    numbering: { reference: 'abs-bullets', level: 0 },
+                    children: makeRunsFromBold(item),
+                  })
+                );
+              });
+              children.push(new Paragraph({ text: '' }));
+              return;
+            }
+
+            // Ordered list
+            if (trimmed.match(/^\d+\.\s/)) {
+              trimmed.split('\n').forEach((line) => {
+                const item = line.replace(/^\d+\.\s/, '').trim();
+                if (!item) return;
+                children.push(
+                  new Paragraph({
+                    numbering: { reference: 'abs-numbered', level: 0 },
+                    children: makeRunsFromBold(item),
+                  })
+                );
+              });
+              children.push(new Paragraph({ text: '' }));
+              return;
+            }
+
+            // Normal paragraph
+            children.push(
+              new Paragraph({
+                alignment: AlignmentType.JUSTIFIED,
+                spacing: { after: 120 },
+                children: makeRunsFromBold(trimmed),
+              })
+            );
+          });
         });
       });
 
-      content += `</body></html>`;
+      const doc = new Document({
+        numbering: { config: numberingConfig },
+        sections: [{ children }],
+      });
 
-      const converted = htmlDocx.asBlob(content, { orientation: 'portrait' });
-      saveAs(converted, `${bookStructure.title}.docx`);
+      const blob = await Packer.toBlob(doc);
+      saveAs(blob, `${bookStructure.title}.docx`);
 
     } catch (error: any) {
       alert("DOCX 생성 실패: " + error.message);
@@ -964,6 +1268,101 @@ export default function BookSmithAI() {
         </div>
       )}
 
+      {/* Cover Concepts Modal */}
+      {isCoverModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className={`w-full max-w-3xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
+            <div className={`p-4 border-b flex items-center justify-between ${theme.border}`}>
+              <div>
+                <h3 className="font-bold text-lg flex items-center gap-2">
+                  <ImageIcon size={18} className={theme.accent} /> 표지 컨셉 3안
+                </h3>
+                <p className="text-xs opacity-70 mt-1">하나를 선택하면 즉시 이미지를 생성해서 붙여드립니다. (Gemini 3 Pro Image Preview)</p>
+              </div>
+              <button
+                onClick={() => setIsCoverModalOpen(false)}
+                className="p-2 rounded hover:bg-black/10"
+                title="닫기"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {!coverConcepts ? (
+                <div className="p-6 text-sm opacity-70">
+                  아직 컨셉이 없습니다. 왼쪽에서 <b>표지</b> 버튼을 눌러 컨셉을 생성하세요.
+                </div>
+              ) : (
+                <>
+                  {/* Audit summary */}
+                  <div className={`p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
+                    <div className="text-sm font-bold mb-2">STEP 1~2 요약</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs opacity-80">
+                      <div>
+                        <div className="font-bold mb-1">시장/페르소나</div>
+                        <div className="whitespace-pre-wrap">{coverConcepts.auditKorean?.market}</div>
+                      </div>
+                      <div>
+                        <div className="font-bold mb-1">경쟁/트렌드</div>
+                        <div className="whitespace-pre-wrap">{coverConcepts.auditKorean?.competition}</div>
+                      </div>
+                      <div>
+                        <div className="font-bold mb-1">방향성</div>
+                        <div className="whitespace-pre-wrap">{coverConcepts.auditKorean?.direction}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {coverConcepts.options?.map((opt) => (
+                      <div key={opt.id} className={`rounded-xl border overflow-hidden ${theme.border} ${theme.bg}`}>
+                        <div className={`p-3 border-b ${theme.border} flex items-center justify-between`}>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${theme.panel} ${theme.border} border`}>
+                              Option {opt.id}
+                            </span>
+                            <span className="font-bold text-sm">{opt.conceptName}</span>
+                          </div>
+                          {coverConcepts.recommendedId === opt.id && (
+                            <span className="text-[11px] font-bold text-green-400">추천</span>
+                          )}
+                        </div>
+                        <div className="p-3 space-y-2">
+                          <p className="text-xs opacity-80 whitespace-pre-wrap">{opt.intentKorean}</p>
+                          <div className="text-[11px] opacity-70 space-y-1">
+                            <div><b>타이포</b>: {opt.typography}</div>
+                            <div><b>톤</b>: {opt.toneAndManner}</div>
+                            <div><b>물성</b>: {opt.materiality}</div>
+                            <div><b>엣지</b>: {opt.edge}</div>
+                          </div>
+                          <button
+                            onClick={() => generateCoverImageFromConcept(opt)}
+                            disabled={generatingCover && generatingCoverOptionId !== opt.id}
+                            className={`w-full mt-2 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${theme.button} disabled:opacity-50`}
+                          >
+                            {(generatingCover && generatingCoverOptionId === opt.id)
+                              ? <Loader2 className="animate-spin" size={16} />
+                              : <Sparkles size={16} />}
+                            이 컨셉으로 생성
+                          </button>
+                          <details className="mt-2">
+                            <summary className="text-xs opacity-70 cursor-pointer">Used Prompt 보기</summary>
+                            <div className={`mt-2 p-2 text-[11px] rounded border ${theme.border} whitespace-pre-wrap`}>
+                              {opt.promptEnglish}
+                            </div>
+                          </details>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className={`border-b p-4 flex items-center justify-between sticky top-0 z-20 print:hidden ${theme.panel} ${theme.border}`}>
         <div className="flex items-center gap-2">
@@ -978,6 +1377,12 @@ export default function BookSmithAI() {
             className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border ${theme.border} hover:bg-black/5`}
           >
             <Settings size={14} /> 톤앤매너 설정
+          </button>
+          <button
+            onClick={handleReset}
+            className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border border-red-200 text-red-500 hover:bg-red-50`}
+          >
+            <RefreshCw size={14} /> 새 프로젝트 시작
           </button>
           <div className="relative">
             <button
@@ -1005,8 +1410,8 @@ export default function BookSmithAI() {
 
         {/* Left Panel */}
         <div className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
-            ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
-            : 'lg:col-span-5'
+          ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
+          : 'lg:col-span-5'
           } ${step === 'done' ? 'hidden lg:flex' : ''}`}>
           <div className={`flex justify-between p-3 rounded-lg border text-xs font-mono ${theme.panel} ${theme.border} opacity-70`}>
             <span className={step === 'interview' ? 'font-bold underline' : ''}>1.Design</span>
@@ -1124,12 +1529,12 @@ export default function BookSmithAI() {
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={generateCoverImage}
-                    disabled={generatingCover}
+                    onClick={generateCoverConcepts}
+                    disabled={coverConceptsLoading || generatingCover}
                     className="bg-indigo-800 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1"
                   >
-                    {generatingCover ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
-                    표지
+                    {(coverConceptsLoading || generatingCover) ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
+                    표지 컨셉
                   </button>
                   <button
                     onClick={startDeepWriting}
@@ -1202,12 +1607,12 @@ export default function BookSmithAI() {
                   집필 진행률
                 </h3>
                 <button
-                  onClick={generateCoverImage}
-                  disabled={generatingCover}
+                  onClick={generateCoverConcepts}
+                  disabled={coverConceptsLoading || generatingCover}
                   className="bg-indigo-800 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1"
                 >
-                  {generatingCover ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
-                  표지 재생성
+                  {(coverConceptsLoading || generatingCover) ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
+                  표지(컨셉 선택)
                 </button>
               </div>
 
@@ -1332,12 +1737,11 @@ export default function BookSmithAI() {
                   {coverImage && (
                     <div className="mb-12 print:break-after-page flex flex-col items-center">
                       <div
-                        className="shadow-2xl rounded overflow-hidden w-64 border-8 border-white relative"
-                        style={{ aspectRatio: '1 / 1.48' }} // Enforce 1:1.48 ratio
+                        className="shadow-2xl rounded overflow-hidden w-80 md:w-[420px] border-8 border-white relative"
+                        style={{ aspectRatio: '2 / 3' }} // Book cover ratio
                       >
                         <img src={coverImage} alt="Book Cover" className="w-full h-full object-cover" />
                       </div>
-                      <p className="text-xs opacity-40 mt-2">AI generated cover based on book concept</p>
                     </div>
                   )}
 

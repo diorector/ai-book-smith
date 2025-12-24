@@ -21,25 +21,36 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Call Imagen API
+        const aspectRatio = "2:3";
+        const imageSize = "2K";
+
+        // Gemini 3 Pro Image Preview (Nano Banana Pro) - text-to-image
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
             {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    instances: [{ prompt }],
-                    parameters: {
-                        sampleCount: 1,
-                        aspectRatio: "3:4" // Portrait ratio for book cover
-                    }
-                })
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [{ text: prompt }],
+                        },
+                    ],
+                    generationConfig: {
+                        responseModalities: ["TEXT", "IMAGE"],
+                        imageConfig: {
+                            aspectRatio,
+                            imageSize,
+                        },
+                    },
+                }),
             }
         );
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error("Imagen API Error:", errorText);
+            console.error("Gemini Image API Error:", errorText);
             return NextResponse.json(
                 { error: `Image generation failed: ${response.status}` },
                 { status: response.status }
@@ -48,15 +59,21 @@ export async function POST(req: NextRequest) {
 
         const data = await response.json();
 
-        if (data.predictions && data.predictions[0] && data.predictions[0].bytesBase64Encoded) {
-            const imageUrl = `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
-            return NextResponse.json({ imageUrl });
-        } else {
+        // Find first inlineData image
+        const parts = data?.candidates?.[0]?.content?.parts ?? [];
+        const imagePart = parts.find((p: any) => p?.inlineData?.data);
+        const base64 = imagePart?.inlineData?.data;
+        const mimeType = imagePart?.inlineData?.mimeType || "image/png";
+
+        if (!base64) {
             return NextResponse.json(
-                { error: "No image data returned from API" },
+                { error: "No image data returned from Gemini image model" },
                 { status: 500 }
             );
         }
+
+        const imageUrl = `data:${mimeType};base64,${base64}`;
+        return NextResponse.json({ imageUrl });
     } catch (error) {
         console.error("Image Generation Error:", error);
         return NextResponse.json(
