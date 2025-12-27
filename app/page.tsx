@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BookOpen, Send, Edit3, CheckCircle, FileText, Download, Cpu, Loader2, Settings, ChevronRight, ChevronDown, RefreshCw, Layers, User, Printer, File, Image as ImageIcon, Wand2, X, Sparkles, Trash2, Palette, Save, PlusCircle, Sliders } from 'lucide-react';
 import ToneSelector from '@/components/ToneSelector';
+import { deleteProjectState, getProjectState, migrateLocalStorageProjectStateIfNeeded, setProjectState } from '@/lib/projectStorage';
 
 // --- Constants & Options ---
 
@@ -202,6 +203,29 @@ const SYSTEM_PROMPTS = {
   **절대 LaTeX 수식($$..$$)을 사용하지 마세요.** 텍스트로 풀어 쓰세요.
   오직 수정된 본문만 출력하세요. (사족 금지)
   `
+  ,
+
+  feedbackCoach: (tonePrompt: string) => `
+  당신은 '책 집필 피드백을 정리해주는 편집자'입니다.
+  사용자는 이미 샘플 원고(서문+1~2챕터)를 보고 있으며, 이제 나머지 집필 전에 피드백을 대화로 주고받고 싶어 합니다.
+
+  [목표]
+  - 사용자의 피드백을 '나머지 원고에 적용 가능한 지침'으로 구체화합니다.
+  - 모호하면 1~2개의 짧은 확인 질문을 합니다.
+
+  [현재 톤앤매너 설정]
+  ${tonePrompt}
+
+  [대화 규칙]
+  - 너무 길게 쓰지 말고, 질문은 최대 2개.
+  - 사용자의 요구를 3~6개의 불릿으로 정리해 주세요.
+  - 마지막에는 항상 아래 포맷으로 '초안 지침'을 포함하세요.
+
+  [출력 포맷 - 반드시 포함]
+  <DRAFT_FEEDBACK>
+  - ...
+  </DRAFT_FEEDBACK>
+  `,
 };
 
 // Helper to load external scripts dynamically
@@ -228,6 +252,8 @@ export default function BookSmithAI() {
   const [polishProgress, setPolishProgress] = useState({ current: 0, total: 0 });
   const [polishStatus, setPolishStatus] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const writingAbortRef = useRef<AbortController | null>(null);
+  const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
   const [showPersonaChat, setShowPersonaChat] = useState(false);
   const [personaChatMessages, setPersonaChatMessages] = useState<{ role: string, content: string }[]>([]);
   const [personaChatInput, setPersonaChatInput] = useState('');
@@ -264,6 +290,15 @@ export default function BookSmithAI() {
   // Writing State
   const [subsectionContents, setSubsectionContents] = useState({});
   const [progress, setProgress] = useState({ total: 0, current: 0, status: 'idle' });
+  const [isTestMode, setIsTestMode] = useState(true); // 테스트 모드 기본값
+  const [writingFeedback, setWritingFeedback] = useState('');
+  const [showFeedbackInput, setShowFeedbackInput] = useState(false);
+  const [isFeedbackChatOpen, setIsFeedbackChatOpen] = useState(false);
+  const [feedbackChatMessages, setFeedbackChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
+    { role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }
+  ]);
+  const [feedbackChatInput, setFeedbackChatInput] = useState('');
+  const [isFeedbackChatLoading, setIsFeedbackChatLoading] = useState(false);
 
   // New Features State
   const [coverImage, setCoverImage] = useState(null);
@@ -365,36 +400,57 @@ export default function BookSmithAI() {
   // Load project state
   useEffect(() => {
     if (!currentProjectId) return;
-    
-    const storageKey = getStorageKey(currentProjectId);
-    const savedState = localStorage.getItem(storageKey);
-    if (savedState) {
+
+    let cancelled = false;
+    (async () => {
       try {
-        const parsed = JSON.parse(savedState);
+        // 1) migrate legacy localStorage state (if any) to IndexedDB
+        await migrateLocalStorageProjectStateIfNeeded(currentProjectId);
+
+        // 2) load from IndexedDB (large state)
+        const parsed = await getProjectState(currentProjectId);
+        if (!parsed || cancelled) return;
+
         if (parsed.step) setStep(parsed.step);
         if (parsed.messages) setMessages(parsed.messages);
         if (parsed.readyForOutline) setReadyForOutline(parsed.readyForOutline);
         if (parsed.toneSettings) setToneSettings(parsed.toneSettings);
         if (parsed.bookStructure) setBookStructure(parsed.bookStructure);
         if (parsed.subsectionContents) setSubsectionContents(parsed.subsectionContents);
-        if (parsed.progress) setProgress(parsed.progress);
+        if (parsed.progress) {
+          // 새로고침/재접속 시: 진행 중(writing)으로 저장된 상태는 실제로는 작업이 중단된 상태이므로 'stopped'로 전환
+          if (parsed.step === 'writing' && parsed.progress?.status === 'writing') {
+            setProgress({ ...parsed.progress, status: 'stopped' });
+            setShowRecoveryBanner(true);
+          } else {
+            setProgress(parsed.progress);
+            setShowRecoveryBanner(false);
+          }
+        }
         if (parsed.coverImage) setCoverImage(parsed.coverImage);
         if (parsed.coverConcepts) setCoverConcepts(parsed.coverConcepts);
         if (parsed.coverPromptUsed) setCoverPromptUsed(parsed.coverPromptUsed);
         if (parsed.currentTheme) setCurrentTheme(parsed.currentTheme);
         if (parsed.includeIntroOutro !== undefined) setIncludeIntroOutro(parsed.includeIntroOutro);
+        if (parsed.isTestMode !== undefined) setIsTestMode(parsed.isTestMode);
+        if (parsed.writingFeedback) setWritingFeedback(parsed.writingFeedback);
+        if (parsed.showFeedbackInput !== undefined) setShowFeedbackInput(parsed.showFeedbackInput);
+        if (parsed.feedbackChatMessages) setFeedbackChatMessages(parsed.feedbackChatMessages);
       } catch (e) {
-        console.error("Failed to load state:", e);
+        console.error("Failed to load project state (IndexedDB):", e);
       }
-    }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentProjectId]);
 
-  // Save state to localStorage whenever relevant changes occur
+  // Save state (IndexedDB) + Save metadata (localStorage)
   useEffect(() => {
     if (!currentProjectId) return;
-    
-    const storageKey = getStorageKey(currentProjectId);
-    const stateToSave = {
+
+    const buildProjectState = (overrides: any = {}) => ({
       step,
       messages,
       readyForOutline,
@@ -406,10 +462,22 @@ export default function BookSmithAI() {
       coverConcepts,
       coverPromptUsed,
       currentTheme,
-      includeIntroOutro
-    };
-    localStorage.setItem(storageKey, JSON.stringify(stateToSave));
-    
+      includeIntroOutro,
+      isTestMode,
+      writingFeedback,
+      showFeedbackInput,
+      feedbackChatMessages,
+      ...overrides,
+    });
+
+    const t = setTimeout(() => {
+      const stateToSave = buildProjectState();
+
+      setProjectState(currentProjectId, stateToSave).catch((e) => {
+        console.error("Failed to save project state (IndexedDB):", e);
+      });
+    }, 600);
+
     // Update project updatedAt
     const updatedProjects = projects.map(p => 
       p.id === currentProjectId 
@@ -419,7 +487,8 @@ export default function BookSmithAI() {
     setProjects(updatedProjects);
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
     localStorage.setItem('ai-book-smith-last-project', currentProjectId);
-  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, currentProjectId, bookStructure?.title]);
+    return () => clearTimeout(t);
+  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, currentProjectId, bookStructure?.title, isTestMode, writingFeedback, showFeedbackInput, feedbackChatMessages]);
 
   // Create new project
   const createNewProject = () => {
@@ -447,6 +516,13 @@ export default function BookSmithAI() {
     setCoverConcepts(null);
     setCoverPromptUsed('');
     setShowProjectSelector(false);
+    setIsTestMode(true);
+    setWritingFeedback('');
+    setShowFeedbackInput(false);
+    setIsFeedbackChatOpen(false);
+    setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }]);
+    setFeedbackChatInput('');
+    setIsFeedbackChatLoading(false);
   };
 
   // Switch project
@@ -464,7 +540,7 @@ export default function BookSmithAI() {
     const updatedProjects = projects.filter(p => p.id !== projectId);
     setProjects(updatedProjects);
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
-    localStorage.removeItem(getStorageKey(projectId));
+    deleteProjectState(projectId).catch(() => {});
     
     if (currentProjectId === projectId) {
       if (updatedProjects.length > 0) {
@@ -508,8 +584,7 @@ export default function BookSmithAI() {
   const handleReset = () => {
     if (window.confirm("현재 프로젝트의 모든 작업이 삭제됩니다. 정말 새로 시작하시겠습니까?")) {
       if (currentProjectId) {
-        const storageKey = getStorageKey(currentProjectId);
-        localStorage.removeItem(storageKey);
+        deleteProjectState(currentProjectId).catch(() => {});
       }
       // Reset state
       setStep('interview');
@@ -522,6 +597,13 @@ export default function BookSmithAI() {
       setCoverImage(null);
       setCoverConcepts(null);
       setCoverPromptUsed('');
+      setIsTestMode(true);
+      setWritingFeedback('');
+      setShowFeedbackInput(false);
+      setIsFeedbackChatOpen(false);
+      setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }]);
+      setFeedbackChatInput('');
+      setIsFeedbackChatLoading(false);
     }
   };
 
@@ -553,11 +635,12 @@ export default function BookSmithAI() {
 
   // --- API Functions ---
 
-  const callGemini = async (prompt: string, systemInstruction = "") => {
+  const callGemini = async (prompt: string, systemInstruction = "", signal?: AbortSignal) => {
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, systemInstruction })
+      body: JSON.stringify({ prompt, systemInstruction }),
+      signal,
     });
 
     if (!response.ok) {
@@ -569,7 +652,7 @@ export default function BookSmithAI() {
     return data.text;
   };
 
-  const callGeminiStream = async (prompt: string | any[], systemInstruction = "", onUpdate: (text: string) => void, generationConfig?: any) => {
+  const callGeminiStream = async (prompt: string | any[], systemInstruction = "", onUpdate: (text: string) => void, generationConfig?: any, signal?: AbortSignal) => {
     const body = Array.isArray(prompt)
       ? { messages: prompt, systemInstruction, generationConfig }
       : { prompt, systemInstruction, generationConfig };
@@ -577,7 +660,8 @@ export default function BookSmithAI() {
     const response = await fetch('/api/generate-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -613,6 +697,76 @@ export default function BookSmithAI() {
       }
     }
     return accumulatedText;
+  };
+
+  const extractDraftFeedbackBlock = (text: string) => {
+    if (!text) return "";
+    const match = text.match(/<DRAFT_FEEDBACK>[\s\S]*?<\/DRAFT_FEEDBACK>/);
+    if (!match) return "";
+    return match[0]
+      .replace("<DRAFT_FEEDBACK>", "")
+      .replace("</DRAFT_FEEDBACK>", "")
+      .trim();
+  };
+
+  const sendFeedbackChat = async () => {
+    if (!feedbackChatInput.trim() || isFeedbackChatLoading) return;
+    const userMsg = { role: 'user' as const, content: feedbackChatInput.trim() };
+    setFeedbackChatInput('');
+    setIsFeedbackChatLoading(true);
+
+    const next = [...feedbackChatMessages, userMsg, { role: 'assistant' as const, content: '' }];
+    setFeedbackChatMessages(next);
+
+    try {
+      const tonePrompt = getTonePrompt();
+      const history = [...feedbackChatMessages, userMsg];
+
+      const finalResponse = await callGeminiStream(
+        history,
+        SYSTEM_PROMPTS.feedbackCoach(tonePrompt),
+        (currentText) => {
+          setFeedbackChatMessages((prev) => {
+            const updated = [...prev];
+            const lastIdx = updated.length - 1;
+            if (lastIdx >= 0) updated[lastIdx] = { ...updated[lastIdx], content: currentText };
+            return updated;
+          });
+        }
+      );
+
+      const draft = extractDraftFeedbackBlock(finalResponse);
+      if (draft) setWritingFeedback(draft);
+    } catch (e: any) {
+      console.error("피드백 채팅 실패:", e);
+      alert(`피드백 대화 실패: ${e?.message || '알 수 없는 오류'}`);
+      // 실패 시 마지막 assistant 메시지 제거
+      setFeedbackChatMessages((prev) => prev.slice(0, -1));
+    } finally {
+      setIsFeedbackChatLoading(false);
+    }
+  };
+
+  const finalizeFeedbackFromChat = async () => {
+    if (isFeedbackChatLoading) return;
+    setIsFeedbackChatLoading(true);
+    try {
+      const convo = feedbackChatMessages
+        .map((m) => `${m.role === 'user' ? 'User' : 'Editor'}: ${m.content}`)
+        .join('\n');
+
+      const prompt = `아래 '피드백 대화'를 바탕으로, 앞으로 생성될 나머지 원고에 적용할 '집필 지침'을 만들어주세요.\n\n요구사항:\n- 5~10개의 불릿\n- 각 불릿은 실행 가능한 지시문(예: \"사례를 매 섹션마다 2개 이상\")\n- 너무 길면 안 됨(총 800자 이내)\n- 출력은 지침만 (설명 금지)\n\n[피드백 대화]\n${convo}`;
+
+      const guidance = await callGemini(prompt);
+      const clean = guidance.trim();
+      if (clean) setWritingFeedback(clean);
+      setIsFeedbackChatOpen(false);
+    } catch (e: any) {
+      console.error("피드백 확정 실패:", e);
+      alert(`피드백 확정 실패: ${e?.message || '알 수 없는 오류'}`);
+    } finally {
+      setIsFeedbackChatLoading(false);
+    }
   };
 
   // --- Feature Logic ---
@@ -753,6 +907,31 @@ export default function BookSmithAI() {
       setCoverImage(data.imageUrl);
       setCoverPromptUsed(option.promptEnglish);
       setIsCoverModalOpen(false);
+
+      // 표지는 용량이 크고, 디바운스 저장 전에 새로고침하면 유실될 수 있어 즉시 저장(IndexedDB flush)
+      try {
+        if (currentProjectId) {
+          const immediateState = {
+            step,
+            messages,
+            readyForOutline,
+            toneSettings,
+            bookStructure,
+            subsectionContents,
+            progress,
+            coverImage: data.imageUrl,
+            coverConcepts,
+            coverPromptUsed: option.promptEnglish,
+            currentTheme,
+            includeIntroOutro,
+            isTestMode,
+            writingFeedback,
+            showFeedbackInput,
+            feedbackChatMessages,
+          };
+          setProjectState(currentProjectId, immediateState).catch(() => {});
+        }
+      } catch {}
     } catch (e: any) {
       let errorMessage = "알 수 없는 오류가 발생했습니다.";
       
@@ -1497,29 +1676,222 @@ export default function BookSmithAI() {
     setBookStructure(newStruct);
   };
 
-  const startDeepWriting = async () => {
+  const startDeepWriting = async (testMode: boolean = false) => {
+    // 이미 집필이 돌고 있으면 중지 후 재시작
+    if (writingAbortRef.current) {
+      try { writingAbortRef.current.abort(); } catch {}
+    }
+    writingAbortRef.current = new AbortController();
+    const writingSignal = writingAbortRef.current.signal;
+
     setStep('writing');
+    setIsTestMode(testMode);
+    
+    const tonePrompt = getTonePrompt();
+    const bookSummary = await callGemini(
+      `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`
+    , "", writingSignal);
+    
+    // 테스트 모드: 서문 + 처음 2개 챕터만 생성
+    let chaptersToWrite: any[] = [];
+    if (testMode) {
+      // 서문 찾기 (제목에 "서문" 또는 "Prologue"가 포함된 경우)
+      const prologue = bookStructure.chapters.find(ch => 
+        ch.title.includes('서문') || ch.title.includes('Prologue') || ch.title.includes('서론')
+      );
+      // 일반 챕터들 (서문 제외, chapter_number로 정렬)
+      const regularChapters = bookStructure.chapters
+        .filter(ch => !(ch.title.includes('서문') || ch.title.includes('Prologue') || ch.title.includes('서론')))
+        .sort((a, b) => a.chapter_number - b.chapter_number);
+      
+      // 서문이 있으면 서문 + 처음 2개 챕터, 없으면 처음 2개 챕터만
+      chaptersToWrite = prologue 
+        ? [prologue, ...regularChapters.slice(0, 2)]
+        : regularChapters.slice(0, 2);
+      
+      console.log('테스트 모드 - 생성할 챕터:', chaptersToWrite.map(ch => `${ch.chapter_number}. ${ch.title}`));
+      console.log('전체 챕터 수:', bookStructure.chapters.length);
+    } else {
+      // 전체 모드: 모든 챕터
+      chaptersToWrite = bookStructure.chapters;
+    }
+    
     let totalTasks = 0;
-    bookStructure.chapters.forEach(ch => totalTasks += ch.subsections.length);
+    chaptersToWrite.forEach(ch => totalTasks += ch.subsections.length);
     setProgress({ total: totalTasks, current: 0, status: 'writing' });
+    
+    let overallContext = "";
+    // 테스트 모드에서는 선택된 챕터만 순차 처리
+    try {
+      for (const chapter of chaptersToWrite) {
+        let prevContext = "";
+        for (const sub of chapter.subsections) {
+          const key = `${chapter.chapter_number}_${sub.sub_number}`;
+          try {
+            const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
+            const content = await callGemini(prompt, "", writingSignal);
+            setSubsectionContents(prev => ({ ...prev, [key]: content }));
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            prevContext = content.slice(-1000);
+          } catch (error: any) {
+            if (error?.name === 'AbortError') throw error;
+            setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" }));
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          }
+        }
+        overallContext += `\n\n챕터 ${chapter.chapter_number} 요약: ${chapter.subsections.map(s => s.title).join(', ')}`;
+      }
+
+      if (testMode) {
+        setProgress(prev => ({ ...prev, status: 'test-complete' }));
+        setShowFeedbackInput(true);
+      } else {
+        setProgress(prev => ({ ...prev, status: 'done' }));
+        setStep('done');
+      }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        setProgress(prev => ({ ...prev, status: 'stopped' }));
+      } else {
+        console.error("집필 실패:", e);
+        setProgress(prev => ({ ...prev, status: 'stopped' }));
+      }
+    } finally {
+      writingAbortRef.current = null;
+    }
+  };
+
+  const resetWritingKeepOutline = () => {
+    if (!window.confirm("목차는 유지하고, 본문/진행률만 초기화한 뒤 다시 집필하시겠습니까?")) return;
+    if (writingAbortRef.current) {
+      try { writingAbortRef.current.abort(); } catch {}
+      writingAbortRef.current = null;
+    }
+    setSubsectionContents({});
+    setProgress({ total: 0, current: 0, status: 'idle' });
+    setIsTestMode(true);
+    setWritingFeedback('');
+    setShowFeedbackInput(false);
+    setIsFeedbackChatOpen(false);
+    setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }]);
+    setFeedbackChatInput('');
+    setIsFeedbackChatLoading(false);
+    setStep('outline');
+  };
+
+  const resumeDeepWriting = async () => {
+    if (!bookStructure) return;
+    // 이미 집필이 돌고 있으면 중지 후 이어쓰기
+    if (writingAbortRef.current) {
+      try { writingAbortRef.current.abort(); } catch {}
+    }
+    writingAbortRef.current = new AbortController();
+    const writingSignal = writingAbortRef.current.signal;
+
+    setStep('writing');
+    setProgress((prev) => ({ ...prev, status: 'writing' }));
+
+    const tonePrompt = getTonePrompt();
+    const bookSummary = await callGemini(
+      `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`,
+      "",
+      writingSignal
+    );
+
+    const isGoodContent = (v: any) => typeof v === 'string' && v.trim() !== '' && !v.startsWith('[Error');
+    const alreadyCount = Object.values(subsectionContents).filter(isGoodContent).length;
+    const totalAll = bookStructure.chapters.reduce((acc, ch) => acc + (ch.subsections?.length || 0), 0);
+    setProgress({ total: totalAll, current: alreadyCount, status: 'writing' });
+
+    try {
+      for (const chapter of bookStructure.chapters) {
+        let prevContext = "";
+        for (const sub of chapter.subsections) {
+          const key = `${chapter.chapter_number}_${sub.sub_number}`;
+          const existing = (subsectionContents as any)[key];
+          if (isGoodContent(existing)) {
+            prevContext = existing.slice(-1000);
+            continue;
+          }
+          try {
+            const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
+            const content = await callGemini(prompt, "", writingSignal);
+            setSubsectionContents(prev => ({ ...prev, [key]: content }));
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            prevContext = content.slice(-1000);
+          } catch (error: any) {
+            if (error?.name === 'AbortError') throw error;
+            setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" }));
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          }
+        }
+      }
+      setProgress(prev => ({ ...prev, status: 'done' }));
+      setStep('done');
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        setProgress(prev => ({ ...prev, status: 'stopped' }));
+      } else {
+        console.error("이어쓰기 실패:", e);
+        setProgress(prev => ({ ...prev, status: 'stopped' }));
+      }
+    } finally {
+      writingAbortRef.current = null;
+    }
+  };
+
+  const continueWritingWithFeedback = async () => {
+    if (!writingFeedback.trim()) {
+      alert('피드백을 입력해주세요.');
+      return;
+    }
+    
+    setShowFeedbackInput(false);
+    setProgress(prev => ({ ...prev, status: 'writing' }));
+    
     const tonePrompt = getTonePrompt();
     const bookSummary = await callGemini(
       `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`
     );
-    const chapterPromises = bookStructure.chapters.map(async (chapter) => {
+    
+    // 이미 작성된 챕터 제외
+    const writtenChapters = new Set(
+      Object.keys(subsectionContents).map(key => {
+        const [chNum] = key.split('_');
+        return parseInt(chNum);
+      })
+    );
+    
+    const remainingChapters = bookStructure.chapters.filter(ch => !writtenChapters.has(ch.chapter_number));
+    
+    let totalTasks = 0;
+    remainingChapters.forEach(ch => totalTasks += ch.subsections.length);
+    const currentProgress = Object.keys(subsectionContents).length;
+    setProgress({ total: currentProgress + totalTasks, current: currentProgress, status: 'writing' });
+    
+    let overallContext = "";
+    // 이미 작성된 챕터들의 요약 수집
+    bookStructure.chapters.filter(ch => writtenChapters.has(ch.chapter_number)).forEach(ch => {
+      overallContext += `\n\n챕터 ${ch.chapter_number} 요약: ${ch.subsections.map(s => s.title).join(', ')}`;
+    });
+    
+    for (const chapter of remainingChapters) {
       let prevContext = "";
       for (const sub of chapter.subsections) {
         const key = `${chapter.chapter_number}_${sub.sub_number}`;
         try {
-        const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
-        const content = await callGemini(prompt);
+          // 피드백을 프롬프트에 추가
+          const basePrompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
+          const promptWithFeedback = `${basePrompt}\n\n[사용자 피드백]\n${writingFeedback}\n\n위 피드백을 반영하여 집필하세요.`;
+          const content = await callGemini(promptWithFeedback);
           setSubsectionContents(prev => ({ ...prev, [key]: content }));
           setProgress(prev => ({ ...prev, current: prev.current + 1 }));
           prevContext = content.slice(-1000);
         } catch (error) { setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" })); }
       }
-    });
-    await Promise.all(chapterPromises);
+      overallContext += `\n\n챕터 ${chapter.chapter_number} 요약: ${chapter.subsections.map(s => s.title).join(', ')}`;
+    }
+    
     setProgress(prev => ({ ...prev, status: 'done' }));
     setStep('done');
   };
@@ -1934,12 +2306,20 @@ export default function BookSmithAI() {
                     {(coverConceptsLoading || generatingCover) ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
                     표지 컨셉
                   </button>
-                  <button
-                    onClick={startDeepWriting}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold shadow-lg flex items-center gap-2 ${theme.button}`}
-                  >
-                    <Cpu size={16} /> 집필 시작
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => startDeepWriting(true)}
+                      className={`px-3 py-2 rounded-lg text-xs font-bold border ${theme.border} hover:bg-black/5 flex items-center gap-2`}
+                    >
+                      <Cpu size={14} /> 테스트 집필 (서문+2챕터)
+                    </button>
+                    <button
+                      onClick={() => startDeepWriting(false)}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold shadow-lg flex items-center gap-2 ${theme.button}`}
+                    >
+                      <Cpu size={16} /> 전체 집필 시작
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -1997,31 +2377,91 @@ export default function BookSmithAI() {
             </div>
           )}
 
-          {(step === 'writing' || step === 'done') && (
+          {(step === 'writing' || step === 'done' || progress.status === 'test-complete') && (
             <div className={`flex-1 rounded-xl border p-4 flex flex-col ${theme.panel} ${theme.border}`}>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold flex items-center gap-2">
-                  {step === 'writing' ? <RefreshCw className="animate-spin text-indigo-400" /> : <CheckCircle className="text-green-500" />}
-                  집필 진행률
+                  {progress.status === 'writing' ? <RefreshCw className="animate-spin text-indigo-400" /> : progress.status === 'test-complete' ? <CheckCircle className="text-amber-500" /> : <CheckCircle className="text-green-500" />}
+                  {progress.status === 'test-complete' ? '테스트 집필 완료' : '집필 진행률'}
                 </h3>
-                <button
-                  onClick={generateCoverConcepts}
-                  disabled={coverConceptsLoading || generatingCover}
-                  className="bg-indigo-800 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1"
-                >
-                  {(coverConceptsLoading || generatingCover) ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
-                  표지(컨셉 선택)
-                </button>
+                <div className="flex items-center gap-2">
+                  {(step === 'writing' && progress.status === 'writing') && (
+                    <button
+                      onClick={() => {
+                        if (writingAbortRef.current) writingAbortRef.current.abort();
+                      }}
+                      className="px-2.5 py-1 rounded text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50"
+                      title="집필 중지"
+                    >
+                      중지
+                    </button>
+                  )}
+                  {(step === 'writing' || progress.status === 'stopped') && (
+                    <button
+                      onClick={resumeDeepWriting}
+                      className={`px-2.5 py-1 rounded text-xs font-bold border ${theme.border} hover:bg-black/5`}
+                      title="이미 생성된 섹션은 유지하고, 비어있는 섹션만 이어서 생성합니다."
+                    >
+                      이어쓰기
+                    </button>
+                  )}
+                  {bookStructure && (
+                    <button
+                      onClick={resetWritingKeepOutline}
+                      className={`px-2.5 py-1 rounded text-xs font-bold border ${theme.border} hover:bg-black/5`}
+                      title="목차는 유지하고 본문/진행률만 초기화합니다."
+                    >
+                      본문만 초기화
+                    </button>
+                  )}
+                  <button
+                    onClick={generateCoverConcepts}
+                    disabled={coverConceptsLoading || generatingCover}
+                    className="bg-indigo-800 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1"
+                  >
+                    {(coverConceptsLoading || generatingCover) ? <Loader2 className="animate-spin" size={14} /> : <ImageIcon size={14} />}
+                    표지(컨셉 선택)
+                  </button>
+                </div>
               </div>
+
+              {showRecoveryBanner && (step === 'writing' || progress.status === 'stopped') && (
+                <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
+                  <div className="text-sm font-bold mb-1">중단된 집필을 감지했어요</div>
+                  <div className="text-xs opacity-70">
+                    브라우저 새로고침/이동 등으로 집필이 멈춘 상태로 보입니다. 아래에서 복구할 수 있어요.
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => {
+                        setShowRecoveryBanner(false);
+                        resumeDeepWriting();
+                      }}
+                      className={`flex-1 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 ${theme.button}`}
+                    >
+                      <Cpu size={16} /> 이어쓰기
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowRecoveryBanner(false);
+                        resetWritingKeepOutline();
+                      }}
+                      className={`px-3 py-2 rounded-lg text-sm font-bold border ${theme.border} hover:bg-black/5`}
+                    >
+                      본문만 초기화
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="mb-2 flex justify-between text-xs opacity-70">
                 <span>Progress</span>
-                <span>{Math.round((progress.current / progress.total) * 100)}% ({progress.current}/{progress.total} sections)</span>
+                <span>{progress.total > 0 ? `${Math.round((progress.current / progress.total) * 100)}%` : '0%'} ({progress.current}/{progress.total} sections)</span>
               </div>
               <div className="w-full bg-black/20 rounded-full h-2.5 mb-6 overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500"
-                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                  className={`h-2.5 rounded-full transition-all duration-500 ${progress.status === 'test-complete' ? 'bg-amber-500' : 'bg-indigo-500'}`}
+                  style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
                 ></div>
               </div>
               <div className={`flex-1 overflow-y-auto space-y-2 border-t pt-4 ${theme.border}`}>
@@ -2044,6 +2484,120 @@ export default function BookSmithAI() {
                   </div>
                 ))}
               </div>
+              {/* 피드백 입력 UI (테스트 모드 완료 후) */}
+              {progress.status === 'test-complete' && showFeedbackInput && (
+                <div className={`mt-4 p-4 rounded-lg border ${theme.border} ${theme.panel}`}>
+                  <h4 className="font-bold text-sm mb-2 flex items-center gap-2">
+                    <Sparkles size={14} className="text-indigo-500" /> 테스트 집필 완료
+                  </h4>
+                  <p className="text-xs opacity-70 mb-3">
+                    서문과 처음 2개 챕터가 생성되었습니다. 피드백을 입력하시면 나머지 집필에 반영됩니다.
+                  </p>
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      onClick={() => setIsFeedbackChatOpen(true)}
+                      className={`px-3 py-2 rounded-lg text-xs font-bold border ${theme.border} hover:bg-black/5 flex items-center gap-2`}
+                    >
+                      <User size={14} /> 피드백 대화로 조율
+                    </button>
+                    <button
+                      onClick={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
+                      className={`px-3 py-2 rounded-lg text-xs font-bold border ${theme.border} hover:bg-black/5`}
+                      title="피드백 대화 초기화"
+                    >
+                      초기화
+                    </button>
+                  </div>
+                  <textarea
+                    value={writingFeedback}
+                    onChange={(e) => setWritingFeedback(e.target.value)}
+                    placeholder="예: 문체가 너무 딱딱해요. 좀 더 친근하게 써주세요.&#10;또는: 예시를 더 많이 넣어주세요.&#10;또는: 톤을 좀 더 격려하는 느낌으로 바꿔주세요."
+                    className={`w-full p-3 rounded-lg text-sm min-h-[120px] resize-y ${theme.input} ${theme.border} ${theme.text} outline-none`}
+                  />
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={continueWritingWithFeedback}
+                      disabled={!writingFeedback.trim()}
+                      className={`flex-1 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 ${theme.button} disabled:opacity-50 disabled:cursor-not-allowed`}
+                    >
+                      <Cpu size={16} /> 피드백 반영하여 나머지 집필
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowFeedbackInput(false);
+                        setProgress(prev => ({ ...prev, status: 'done' }));
+                        setStep('done');
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold border ${theme.border} hover:bg-black/5`}
+                    >
+                      피드백 없이 완료
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 피드백 대화 모달 */}
+              {isFeedbackChatOpen && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+                  <div className={`w-full max-w-2xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
+                    <div className={`p-3 border-b flex items-center justify-between ${theme.border}`}>
+                      <div className="font-bold text-sm flex items-center gap-2">
+                        <User size={16} className={theme.accent} /> 피드백 대화
+                      </div>
+                      <button
+                        onClick={() => setIsFeedbackChatOpen(false)}
+                        className="p-2 rounded hover:bg-black/10"
+                        title="닫기"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                    <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+                      {feedbackChatMessages.map((m, i) => (
+                        <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${m.role === 'user'
+                            ? `${theme.button} text-white rounded-tr-none`
+                            : `${theme.panel} ${theme.text} rounded-tl-none border ${theme.border}`
+                            }`}>
+                            {renderMarkdown(m.content) || m.content}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className={`p-3 border-t ${theme.border} ${theme.bg}`}>
+                      <div className="flex gap-2">
+                        <input
+                          value={feedbackChatInput}
+                          onChange={(e) => setFeedbackChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && sendFeedbackChat()}
+                          disabled={isFeedbackChatLoading}
+                          placeholder="피드백을 적고 Enter..."
+                          className={`flex-1 border rounded-lg px-3 py-2 outline-none ${theme.input} ${theme.border} ${theme.text}`}
+                        />
+                        <button
+                          onClick={sendFeedbackChat}
+                          disabled={isFeedbackChatLoading || !feedbackChatInput.trim()}
+                          className={`px-3 py-2 rounded-lg text-white font-bold ${theme.button} disabled:opacity-50`}
+                        >
+                          {isFeedbackChatLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                        </button>
+                        <button
+                          onClick={finalizeFeedbackFromChat}
+                          disabled={isFeedbackChatLoading || feedbackChatMessages.length < 2}
+                          className={`px-3 py-2 rounded-lg font-bold border ${theme.border} hover:bg-black/5 disabled:opacity-50`}
+                          title="대화 내용을 지침으로 확정"
+                        >
+                          확정
+                        </button>
+                      </div>
+                      <div className="mt-2 text-[11px] opacity-70">
+                        팁: 여러 번 왔다갔다 한 뒤 <b>확정</b>을 누르면, 현재 대화를 집필 지침으로 요약해 자동 반영합니다.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {step === 'done' && (
                 <div className="space-y-2 mt-4">
                   <button onClick={downloadBook} className="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2">
