@@ -60,14 +60,35 @@ export async function POST(req: NextRequest) {
         const data = await response.json();
 
         // Find first inlineData image
-        const parts = data?.candidates?.[0]?.content?.parts ?? [];
+        if (!data?.candidates || data.candidates.length === 0) {
+            return NextResponse.json(
+                { error: "Gemini API가 응답 후보를 반환하지 않았습니다. 프롬프트를 수정하거나 다시 시도해주세요." },
+                { status: 500 }
+            );
+        }
+
+        const parts = data.candidates[0]?.content?.parts ?? [];
+        if (parts.length === 0) {
+            return NextResponse.json(
+                { error: "Gemini API 응답에 이미지 데이터가 없습니다. 프롬프트를 확인해주세요." },
+                { status: 500 }
+            );
+        }
+
         const imagePart = parts.find((p: any) => p?.inlineData?.data);
-        const base64 = imagePart?.inlineData?.data;
-        const mimeType = imagePart?.inlineData?.mimeType || "image/png";
+        if (!imagePart) {
+            return NextResponse.json(
+                { error: "이미지 데이터를 찾을 수 없습니다. 응답 형식이 예상과 다릅니다." },
+                { status: 500 }
+            );
+        }
+
+        const base64 = imagePart.inlineData?.data;
+        const mimeType = imagePart.inlineData?.mimeType || "image/png";
 
         if (!base64) {
             return NextResponse.json(
-                { error: "No image data returned from Gemini image model" },
+                { error: "이미지 base64 데이터가 비어있습니다." },
                 { status: 500 }
             );
         }

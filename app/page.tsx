@@ -158,6 +158,7 @@ const SYSTEM_PROMPTS = {
   [책 정보]
   - 제목: ${bookInfo.title}
   - 챕터: ${chapter.chapter_number}. ${chapter.title}
+
   - 챕터 개요: ${chapter.subsections.map((s, i) => `${i+1}. ${s.title}`).join(', ')}
   - 핵심 키워드: ${bookInfo.keywords?.join(', ') || ''}
 
@@ -509,30 +510,83 @@ export default function BookSmithAI() {
 
   const generateCoverImageFromConcept = async (option) => {
     if (!option?.promptEnglish) return;
+    
     setGeneratingCover(true);
     setGeneratingCoverOptionId(option?.id || null);
+    
+    // 타임아웃 설정 (60초)
+    const controller = new AbortController();
+    let timeoutId: NodeJS.Timeout | null = null;
+    
     try {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 60000);
+
       const response = await fetch('/api/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: option.promptEnglish })
+        body: JSON.stringify({ prompt: option.promptEnglish }),
+        signal: controller.signal
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `Image Gen Error: ${response.status}`);
+        let errorMessage = `이미지 생성 실패 (${response.status})`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          try {
+            const errorText = await response.text();
+            errorMessage = errorText || errorMessage;
+          } catch {
+            // 응답을 읽을 수 없는 경우
+          }
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
-      if (data.imageUrl) {
-        setCoverImage(data.imageUrl);
-        setCoverPromptUsed(option.promptEnglish);
-        setIsCoverModalOpen(false);
+      
+      if (!data || !data.imageUrl) {
+        throw new Error("서버에서 이미지 데이터를 받지 못했습니다. 다시 시도해주세요.");
       }
+
+      // 모바일에서 메모리 문제 방지를 위해 이미지 크기 체크
+      if (data.imageUrl.length > 10 * 1024 * 1024) { // 10MB 이상
+        console.warn("이미지가 매우 큽니다:", data.imageUrl.length);
+      }
+
+      // 상태 업데이트를 안전하게 처리
+      setCoverImage(data.imageUrl);
+      setCoverPromptUsed(option.promptEnglish);
+      setIsCoverModalOpen(false);
     } catch (e: any) {
-      alert("이미지 생성 실패: " + e.message);
-      console.error(e);
+      let errorMessage = "알 수 없는 오류가 발생했습니다.";
+      
+      if (e.name === 'AbortError' || e.message?.includes('aborted')) {
+        errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
+      } else if (e?.message) {
+        errorMessage = e.message;
+      }
+      
+      console.error("이미지 생성 오류:", e);
+      
+      // 모바일에서도 보이도록 에러 표시 개선
+      try {
+        if (typeof window !== 'undefined' && window.alert) {
+          alert(`이미지 생성 실패\n\n${errorMessage}\n\n브라우저 콘솔을 확인해주세요.`);
+        }
+      } catch (alertError) {
+        console.error("알림 표시 실패:", alertError);
+      }
     } finally {
+      // 타임아웃 정리
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
+      // 상태 정리
       setGeneratingCover(false);
       setGeneratingCoverOptionId(null);
     }
@@ -1750,7 +1804,17 @@ export default function BookSmithAI() {
                         className="shadow-2xl rounded overflow-hidden w-80 md:w-[420px] border-8 border-white relative"
                         style={{ aspectRatio: '2 / 3' }} // Book cover ratio
                       >
-                        <img src={coverImage} alt="Book Cover" className="w-full h-full object-cover" />
+                        <img 
+                          src={coverImage} 
+                          alt="Book Cover" 
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            console.error("이미지 로딩 실패:", e);
+                            alert("표지 이미지를 표시할 수 없습니다. 이미지가 손상되었거나 너무 클 수 있습니다.");
+                            setCoverImage(null);
+                          }}
+                          loading="lazy"
+                        />
                       </div>
                     </div>
                   )}
