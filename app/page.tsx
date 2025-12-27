@@ -14,9 +14,9 @@ const THEMES = {
     text: 'text-slate-100',
     panel: 'bg-slate-800',
     border: 'border-slate-700',
-    input: 'bg-slate-900',
+    input: 'bg-slate-800 text-slate-100',
     accent: 'text-indigo-400',
-    button: 'bg-indigo-600 hover:bg-indigo-500',
+    button: 'bg-indigo-600 hover:bg-indigo-500 text-white',
     previewBg: 'bg-white',
     previewText: 'text-slate-900'
   },
@@ -50,7 +50,7 @@ const THEMES = {
     text: 'text-gray-200',
     panel: 'bg-gray-900',
     border: 'border-gray-800',
-    input: 'bg-black',
+    input: 'bg-gray-900 text-gray-200',
     accent: 'text-cyan-400',
     button: 'bg-cyan-700 hover:bg-cyan-600 text-white',
     previewBg: 'bg-gray-100',
@@ -278,12 +278,96 @@ export default function BookSmithAI() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const STORAGE_KEY = 'ai-book-smith-state';
+  // Project Management
+  const PROJECTS_KEY = 'ai-book-smith-projects';
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; updatedAt: number }>>([]);
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState('');
 
-  // --- Persistence Logic ---
-  // Load state from localStorage on mount
+  // Generate project ID
+  const generateProjectId = () => {
+    return `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  // Get storage key for current project
+  const getStorageKey = (projectId: string) => `ai-book-smith-state-${projectId}`;
+
+  // Load projects list (initialization)
   useEffect(() => {
-    const savedState = localStorage.getItem(STORAGE_KEY);
+    const savedProjects = localStorage.getItem(PROJECTS_KEY);
+    if (savedProjects) {
+      try {
+        const parsed = JSON.parse(savedProjects);
+        if (parsed.length > 0) {
+          setProjects(parsed);
+          // Load last project or first project
+          const lastProjectId = localStorage.getItem('ai-book-smith-last-project');
+          const projectId = lastProjectId && parsed.find((p: any) => p.id === lastProjectId) 
+            ? lastProjectId 
+            : parsed[0].id;
+          setCurrentProjectId(projectId);
+        } else {
+          // Empty array, create first project
+          const newId = generateProjectId();
+          const newProject = {
+            id: newId,
+            name: '새 프로젝트',
+            updatedAt: Date.now()
+          };
+          setProjects([newProject]);
+          setCurrentProjectId(newId);
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify([newProject]));
+          localStorage.setItem('ai-book-smith-last-project', newId);
+        }
+      } catch (e) {
+        console.error("Failed to load projects:", e);
+        // On error, create new project
+        const newId = generateProjectId();
+        const newProject = {
+          id: newId,
+          name: '새 프로젝트',
+          updatedAt: Date.now()
+        };
+        setProjects([newProject]);
+        setCurrentProjectId(newId);
+        localStorage.setItem(PROJECTS_KEY, JSON.stringify([newProject]));
+        localStorage.setItem('ai-book-smith-last-project', newId);
+      }
+    } else {
+      // No projects saved, create first one
+      const newId = generateProjectId();
+      const newProject = {
+        id: newId,
+        name: '새 프로젝트',
+        updatedAt: Date.now()
+      };
+      setProjects([newProject]);
+      setCurrentProjectId(newId);
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify([newProject]));
+      localStorage.setItem('ai-book-smith-last-project', newId);
+    }
+  }, []);
+
+  // Close project selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showProjectSelector && !target.closest('.project-selector')) {
+        setShowProjectSelector(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showProjectSelector]);
+
+  // Load project state
+  useEffect(() => {
+    if (!currentProjectId) return;
+    
+    const storageKey = getStorageKey(currentProjectId);
+    const savedState = localStorage.getItem(storageKey);
     if (savedState) {
       try {
         const parsed = JSON.parse(savedState);
@@ -303,12 +387,13 @@ export default function BookSmithAI() {
         console.error("Failed to load state:", e);
       }
     }
-  }, []);
+  }, [currentProjectId]);
 
   // Save state to localStorage whenever relevant changes occur
   useEffect(() => {
-    // Skip saving if it's the initial empty state and we haven't loaded yet
-    // (Simple way: if messages has more than initial or step is changed)
+    if (!currentProjectId) return;
+    
+    const storageKey = getStorageKey(currentProjectId);
     const stateToSave = {
       step,
       messages,
@@ -323,13 +408,120 @@ export default function BookSmithAI() {
       currentTheme,
       includeIntroOutro
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro]);
+    localStorage.setItem(storageKey, JSON.stringify(stateToSave));
+    
+    // Update project updatedAt
+    const updatedProjects = projects.map(p => 
+      p.id === currentProjectId 
+        ? { ...p, updatedAt: Date.now(), name: bookStructure?.title || p.name || '제목 없음' }
+        : p
+    );
+    setProjects(updatedProjects);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+    localStorage.setItem('ai-book-smith-last-project', currentProjectId);
+  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, currentProjectId, bookStructure?.title]);
+
+  // Create new project
+  const createNewProject = () => {
+    const newId = generateProjectId();
+    const newProject = {
+      id: newId,
+      name: '새 프로젝트',
+      updatedAt: Date.now()
+    };
+    const updatedProjects = [newProject, ...projects];
+    setProjects(updatedProjects);
+    setCurrentProjectId(newId);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+    localStorage.setItem('ai-book-smith-last-project', newId);
+    
+    // Reset state
+    setStep('interview');
+    setMessages([{ role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }]);
+    setInput('');
+    setReadyForOutline(false);
+    setBookStructure(null);
+    setSubsectionContents({});
+    setProgress({ total: 0, current: 0, status: 'idle' });
+    setCoverImage(null);
+    setCoverConcepts(null);
+    setCoverPromptUsed('');
+    setShowProjectSelector(false);
+  };
+
+  // Switch project
+  const switchProject = (projectId: string) => {
+    setCurrentProjectId(projectId);
+    localStorage.setItem('ai-book-smith-last-project', projectId);
+    setShowProjectSelector(false);
+    // State will be loaded by useEffect
+  };
+
+  // Delete project
+  const deleteProject = (projectId: string) => {
+    if (!window.confirm('이 프로젝트를 삭제하시겠습니까? 복구할 수 없습니다.')) return;
+    
+    const updatedProjects = projects.filter(p => p.id !== projectId);
+    setProjects(updatedProjects);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+    localStorage.removeItem(getStorageKey(projectId));
+    
+    if (currentProjectId === projectId) {
+      if (updatedProjects.length > 0) {
+        switchProject(updatedProjects[0].id);
+      } else {
+        createNewProject();
+      }
+    }
+  };
+
+  // Start editing project name
+  const startEditingProject = (projectId: string, currentName: string) => {
+    setEditingProjectId(projectId);
+    setEditingProjectName(currentName);
+  };
+
+  // Save project name
+  const saveProjectName = (projectId: string) => {
+    if (!editingProjectName.trim()) {
+      setEditingProjectId(null);
+      return;
+    }
+    
+    const updatedProjects = projects.map(p => 
+      p.id === projectId 
+        ? { ...p, name: editingProjectName.trim().substring(0, 50), updatedAt: Date.now() }
+        : p
+    );
+    setProjects(updatedProjects);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+    setEditingProjectId(null);
+    setEditingProjectName('');
+  };
+
+  // Cancel editing project name
+  const cancelEditingProject = () => {
+    setEditingProjectId(null);
+    setEditingProjectName('');
+  };
 
   const handleReset = () => {
-    if (window.confirm("진행 중인 모든 작업이 삭제됩니다. 정말 새로 시작하시겠습니까?")) {
-      localStorage.removeItem(STORAGE_KEY);
-      window.location.reload();
+    if (window.confirm("현재 프로젝트의 모든 작업이 삭제됩니다. 정말 새로 시작하시겠습니까?")) {
+      if (currentProjectId) {
+        const storageKey = getStorageKey(currentProjectId);
+        localStorage.removeItem(storageKey);
+      }
+      // Reset state
+      setStep('interview');
+      setMessages([{ role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }]);
+      setInput('');
+      setReadyForOutline(false);
+      setBookStructure(null);
+      setSubsectionContents({});
+      setProgress({ total: 0, current: 0, status: 'idle' });
+      setCoverImage(null);
+      setCoverConcepts(null);
+      setCoverPromptUsed('');
     }
   };
 
@@ -1206,12 +1398,49 @@ export default function BookSmithAI() {
 
   // --- App Logic ---
 
+  // Extract project name from conversation
+  const extractProjectName = async (userMessage: string, allMessages: any[]) => {
+    try {
+      // 첫 사용자 메시지에서 책 주제 추출
+      if (allMessages.filter(m => m.role === 'user').length === 1) {
+        const prompt = `다음 사용자 메시지에서 책의 주제나 키워드를 추출하여 짧은 프로젝트 이름(최대 20자)을 만들어주세요. 
+책 제목이 명시되어 있으면 그것을 사용하고, 없으면 주제를 요약해서 만들어주세요.
+출력은 이름만 출력하세요. 설명이나 다른 텍스트는 포함하지 마세요.
+
+사용자 메시지: "${userMessage}"`;
+        
+        const projectName = await callGemini(prompt);
+        const cleanName = projectName.trim().replace(/^["']|["']$/g, '').substring(0, 20);
+        
+        if (cleanName && currentProjectId) {
+          const updatedProjects = projects.map(p => 
+            p.id === currentProjectId 
+              ? { ...p, name: cleanName, updatedAt: Date.now() }
+              : p
+          );
+          setProjects(updatedProjects);
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+        }
+      }
+    } catch (e) {
+      console.error("프로젝트 이름 추출 실패:", e);
+      // 실패해도 계속 진행
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!input.trim()) return;
     const userMsg = { role: 'user', content: input };
-    setMessages(prev => [...prev, userMsg]);
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setInput('');
     setLoading(true);
+    
+    // 첫 사용자 메시지면 프로젝트 이름 추출 (비동기로 실행, 블로킹 안 함)
+    if (messages.filter(m => m.role === 'user').length === 0) {
+      extractProjectName(input, newMessages).catch(() => {});
+    }
+    
     try {
       const tonePrompt = getTonePrompt();
       setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
@@ -1246,6 +1475,17 @@ export default function BookSmithAI() {
         setBookStructure(parsed);
         setStep('outline');
         if (parsed.chapters.length > 0) setExpandedChapters({ 0: true });
+        
+        // 책 제목이 생성되면 프로젝트 이름 업데이트
+        if (parsed.title && currentProjectId) {
+          const updatedProjects = projects.map(p => 
+            p.id === currentProjectId 
+              ? { ...p, name: parsed.title.substring(0, 30), updatedAt: Date.now() }
+              : p
+          );
+          setProjects(updatedProjects);
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+        }
       } else { throw new Error("JSON parsing failed"); }
     } catch (error) { alert("목차 생성 실패: " + error.message); } finally { setLoading(false); }
   };
@@ -1317,20 +1557,6 @@ export default function BookSmithAI() {
       {/* Print Styles Global */}
       <style>{`@media print { body * { visibility: hidden; } #printable-area, #printable-area * { visibility: visible; } #printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 2cm; } header, .sidebar-panel { display: none !important; } @page { margin: 2cm; size: auto; } }`}</style>
 
-      {/* Global Tone Settings Modal */}
-      {isToneModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <ToneSelector
-              toneSettings={toneSettings}
-              setToneSettings={setToneSettings}
-              theme={theme}
-              TONE_FACTORS={TONE_FACTORS}
-              onClose={() => setIsToneModalOpen(false)}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Cover Concepts Modal */}
       {isCoverModalOpen && (
@@ -1428,33 +1654,129 @@ export default function BookSmithAI() {
       )}
 
       {/* Header */}
-      <header className={`border-b p-4 flex items-center justify-between sticky top-0 z-20 print:hidden ${theme.panel} ${theme.border}`}>
-        <div className="flex items-center gap-2">
-          <BookOpen className={theme.accent} />
-          <h1 className={`text-xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent`}>
-            AI Book Smith <span className="text-xs text-slate-500 font-mono ml-2">Publisher + AI</span>
-          </h1>
+      <header className={`border-b py-2 px-4 flex items-center justify-between sticky top-0 z-20 print:hidden ${theme.panel} ${theme.border}`}>
+        <div className="flex items-center gap-2.5">
+          <div className="relative">
+            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-cyan-500 rounded-lg blur-sm opacity-50 animate-pulse"></div>
+            <div className="relative bg-gradient-to-br from-indigo-500 via-purple-500 to-cyan-500 p-1.5 rounded-lg">
+              <BookOpen className="text-white" size={18} />
+            </div>
+          </div>
+          <div className="flex flex-col">
+            <h1 className={`text-lg font-extrabold bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 bg-clip-text text-transparent tracking-tight`}>
+              Book Smith
+            </h1>
+            <span className="text-[9px] text-slate-400 font-mono tracking-wider uppercase">Publisher × AI</span>
+          </div>
         </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setIsToneModalOpen(true)}
-            className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border ${theme.border} hover:bg-black/5`}
-          >
-            <Settings size={14} /> 톤앤매너 설정
-          </button>
+        <div className="flex items-center gap-2">
+          {/* Project Selector */}
+          <div className="relative project-selector">
+            <button
+              onClick={() => setShowProjectSelector(!showProjectSelector)}
+              className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border ${theme.border} hover:bg-black/5`}
+            >
+              <File size={12} />
+              {currentProjectId && projects.find(p => p.id === currentProjectId)?.name || '프로젝트 선택'}
+              <ChevronDown size={10} />
+            </button>
+            {showProjectSelector && (
+              <div className={`absolute top-full right-0 mt-2 w-64 rounded-lg shadow-xl border z-50 ${theme.panel} ${theme.border}`}>
+                <div className={`p-2 border-b ${theme.border}`}>
+                  <button
+                    onClick={createNewProject}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-bold ${theme.button} hover:opacity-90`}
+                  >
+                    <PlusCircle size={16} /> 새 프로젝트
+                  </button>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {projects.length === 0 ? (
+                    <div className="p-4 text-center text-sm opacity-60">프로젝트가 없습니다</div>
+                  ) : (
+                    projects.map((project) => (
+                      <div
+                        key={project.id}
+                        className={`p-2 border-b last:border-b-0 ${theme.border} ${currentProjectId === project.id ? 'bg-indigo-500/10' : ''}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          {editingProjectId === project.id ? (
+                            <div className="flex-1 flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={editingProjectName}
+                                onChange={(e) => setEditingProjectName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    saveProjectName(project.id);
+                                  } else if (e.key === 'Escape') {
+                                    cancelEditingProject();
+                                  }
+                                }}
+                                onBlur={() => saveProjectName(project.id)}
+                                autoFocus
+                                className={`flex-1 px-2 py-1 text-sm rounded border ${theme.border} ${theme.input} ${theme.text} outline-none`}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => switchProject(project.id)}
+                                className="flex-1 text-left px-2 py-1 rounded hover:bg-black/5"
+                              >
+                                <div className="font-semibold text-sm">{project.name}</div>
+                                <div className="text-xs opacity-60">
+                                  {new Date(project.updatedAt).toLocaleDateString('ko-KR', { 
+                                    month: 'short', 
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </div>
+                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startEditingProject(project.id, project.name);
+                                  }}
+                                  className="p-1 rounded hover:bg-indigo-500/20 text-indigo-500"
+                                  title="이름 변경"
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+                                <button
+                                  onClick={() => deleteProject(project.id)}
+                                  className="p-1 rounded hover:bg-red-500/20 text-red-500"
+                                  title="삭제"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <button
             onClick={handleReset}
-            className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border border-red-200 text-red-500 hover:bg-red-50`}
+            className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border border-red-200 text-red-500 hover:bg-red-50`}
           >
-            <RefreshCw size={14} /> 새 프로젝트 시작
+            <RefreshCw size={12} /> 프로젝트 초기화
           </button>
           <div className="relative">
             <button
               onClick={() => setShowThemeSelector(!showThemeSelector)}
-              className={`p-2 rounded-full hover:bg-black/10 transition-colors ${theme.text}`}
+              className={`p-1.5 rounded-full hover:bg-black/10 transition-colors ${theme.text}`}
               title="Change Theme"
             >
-              <Palette size={20} />
+              <Palette size={16} />
             </button>
             {showThemeSelector && (
               <div className={`absolute right-0 top-10 w-40 rounded-lg shadow-xl border overflow-hidden z-30 ${theme.panel} ${theme.border}`}>
@@ -1494,11 +1816,18 @@ export default function BookSmithAI() {
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.filter(m => m.role !== 'system').map((msg, idx) => (
                   <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${msg.role === 'user'
-                      ? `${theme.button} text-white rounded-tr-none`
-                      : `${theme.bg} ${theme.text} rounded-tl-none border ${theme.border}`
-                      }`}>
-                      {msg.role === 'user' ? msg.content : renderMarkdown(msg.content)}
+                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${
+                      msg.role === 'user'
+                        ? `${theme.button} text-white rounded-tr-none`
+                        : currentTheme === 'midnight' 
+                          ? 'bg-slate-800 text-slate-100 border border-slate-700 rounded-tl-none' 
+                          : currentTheme === 'deepSpace'
+                            ? 'bg-gray-900 text-gray-200 border border-gray-800 rounded-tl-none'
+                            : `${theme.panel} ${theme.text} border ${theme.border} rounded-tl-none`
+                    }`}>
+                      <span className={currentTheme === 'midnight' ? 'text-slate-100' : currentTheme === 'deepSpace' ? 'text-gray-200' : ''}>
+                        {msg.role === 'user' ? msg.content : (renderMarkdown(msg.content) || msg.content)}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -1512,7 +1841,12 @@ export default function BookSmithAI() {
                       TONE_FACTORS={TONE_FACTORS}
                       onClose={() => setShowToneSelector(false)}
                     />
-                    <button onClick={() => setShowToneSelector(false)} className="w-full mt-2 text-xs opacity-50 hover:opacity-100 underline">설정 완료 (채팅 계속하기)</button>
+                    <button 
+                      onClick={() => setShowToneSelector(false)} 
+                      className={`w-full mt-4 py-3 px-4 rounded-lg font-bold text-sm shadow-lg transition-all hover:scale-105 ${theme.button} text-white`}
+                    >
+                      설정 완료 (채팅 계속하기)
+                    </button>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
