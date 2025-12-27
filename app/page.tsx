@@ -129,6 +129,7 @@ const SYSTEM_PROMPTS = {
     "title": "책 제목",
     "target_audience": "타겟 독자",
     "concept": "컨셉",
+    "keywords": ["핵심 키워드1", "핵심 키워드2", ...],
     "chapters": [
       {
         "chapter_number": 1,
@@ -151,13 +152,17 @@ const SYSTEM_PROMPTS = {
   입력받은 JSON 구조의 일부를 수정하여, **수정된 해당 부분의 JSON 객체만** 반환하세요.
   `,
 
-  writer: (bookInfo: any, chapter: any, subsection: any, prevContext: string, tonePrompt: string) => `
-  당신은 베스트셀러 작가입니다. 
-  
+  writer: (bookInfo: any, chapter: any, subsection: any, prevContext: string, tonePrompt: string, bookSummary: string = "") => `
+  당신은 베스트셀러 작가입니다.
+
   [책 정보]
   - 제목: ${bookInfo.title}
   - 챕터: ${chapter.chapter_number}. ${chapter.title}
-  
+  - 챕터 개요: ${chapter.subsections.map((s, i) => `${i+1}. ${s.title}`).join(', ')}
+  - 핵심 키워드: ${bookInfo.keywords?.join(', ') || ''}
+
+  ${bookSummary ? `[책 전체 핵심 요약]\n${bookSummary}\n\n` : ''} 
+
   [톤앤매너 지침]
   ${tonePrompt}
   
@@ -170,10 +175,12 @@ const SYSTEM_PROMPTS = {
 
   [집필 필수 규칙 - 매우 중요]
   1. **목표 분량: 공백 포함 2,000자 이상.** 절대 요약하지 말고, 대화문, 묘사, 사례 연구, 철학적 사색을 충분히 섞어서 글을 '늘려' 쓰세요.
-  2. **사족(Meta-text) 절대 금지:** 글의 시작이나 끝에 "[2000자 충족함]", "(현재 분량: ...)", "다음 챕터에서는...", "이상으로..." 같은 시스템 메시지나 작가의 말을 절대 포함하지 마세요. **오직 순수한 원고 본문만 출력하세요.**
-  3. **LaTeX 수식 금지:** $$...$$나 \\text{} 같은 수식 코드를 절대 사용하지 마세요. 모든 수식이나 도식은 '글(텍스트)'로 풀어서 설명하세요.
-  4. **코드 블록 금지:** 프로그래밍 코드가 아니라면 \`\`\` 사용을 자제하세요.
-  5. Markdown 형식을 사용하되, 최상위 제목(#)은 쓰지 마세요. 소제목은 ###를 사용하세요.
+  2. **챕터 내 일관성:** 이 챕터의 다른 섹션들(${chapter.subsections.filter(s => s.sub_number !== subsection.sub_number).map(s => s.title).join(', ')})과 논리적으로 이어지도록 작성하세요.
+  3. **사족(Meta-text) 절대 금지:** 글의 시작이나 끝에 "[2000자 충족함]", "(현재 분량: ...)", "다음 챕터에서는...", "이상으로..." 같은 시스템 메시지나 작가의 말을 절대 포함하지 마세요. **오직 순수한 원고 본문만 출력하세요.**
+  4. **LaTeX 수식 금지:** $$...$$나 \\text{} 같은 수식 코드를 절대 사용하지 마세요. 모든 수식이나 도식은 '글(텍스트)'로 풀어서 설명하세요.
+  5. **코드 블록 금지:** 프로그래밍 코드가 아니라면 \`\`\` 사용을 자제하세요.
+  6. Markdown 형식을 사용하되, 최상위 제목(#)은 쓰지 마세요. 소제목은 ###를 사용하세요.
+  7. **용어 통일:** 핵심 키워드는 반드시 원래 용어를 그대로 사용하고, 동의어나 다른 표현으로 바꾸지 마세요.
   `,
 
   editor: (originalText: string, instruction: string, tonePrompt: string) => `
@@ -1202,16 +1209,19 @@ export default function BookSmithAI() {
     bookStructure.chapters.forEach(ch => totalTasks += ch.subsections.length);
     setProgress({ total: totalTasks, current: 0, status: 'writing' });
     const tonePrompt = getTonePrompt();
+    const bookSummary = await callGemini(
+      `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`
+    );
     const chapterPromises = bookStructure.chapters.map(async (chapter) => {
       let prevContext = "";
       for (const sub of chapter.subsections) {
         const key = `${chapter.chapter_number}_${sub.sub_number}`;
         try {
-          const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt);
-          const content = await callGemini(prompt);
+        const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
+        const content = await callGemini(prompt);
           setSubsectionContents(prev => ({ ...prev, [key]: content }));
           setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          prevContext = content.slice(-300);
+          prevContext = content.slice(-1000);
         } catch (error) { setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" })); }
       }
     });
