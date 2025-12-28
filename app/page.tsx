@@ -329,13 +329,12 @@ export default function BookSmithAI() {
   const [tocExpandedChapters, setTocExpandedChapters] = useState<Record<number, boolean>>({});
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
-  const [syncedPanelHeightPx, setSyncedPanelHeightPx] = useState<number | null>(null);
+  const [leftPanelHeight, setLeftPanelHeight] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement | null>(null);
   const leftProgressScrollRef = useRef<HTMLDivElement | null>(null);
-  const leftPanelOuterRef = useRef<HTMLDivElement | null>(null);
-  const rightPanelOuterRef = useRef<HTMLDivElement | null>(null);
+  const leftPanelRef = useRef<HTMLDivElement | null>(null);
 
   const canShowDetailedToc = !!bookStructure && (progress.status === 'done' || progress.status === 'test-complete' || step === 'done');
 
@@ -567,31 +566,27 @@ ${JSON.stringify({ claims }, null, 2)}
     }
   }, [activeSectionKey]);
 
-  // Sync right panel height constraint to left panel height (right is constrained, and matches left)
+  // 왼쪽 패널 높이 측정 → 오른쪽 패널에 적용
   useEffect(() => {
-    const left = leftPanelOuterRef.current;
-    if (!left) return;
-
     const measure = () => {
-      const h = Math.round(left.getBoundingClientRect().height || 0);
-      setSyncedPanelHeightPx(h > 0 ? h : null);
+      if (leftPanelRef.current) {
+        const h = leftPanelRef.current.scrollHeight;
+        setLeftPanelHeight(h > 0 ? h : null);
+      }
     };
-
     measure();
-    let ro: any = null;
-    try {
-      ro = new (window as any).ResizeObserver(() => measure());
-      ro.observe(left);
-    } catch {
-      // ignore
+    // ResizeObserver로 변화 감지
+    let ro: ResizeObserver | null = null;
+    if (leftPanelRef.current && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(leftPanelRef.current);
     }
     window.addEventListener('resize', measure);
     return () => {
       window.removeEventListener('resize', measure);
-      try { ro?.disconnect?.(); } catch {}
+      ro?.disconnect();
     };
-  }, [step, showDetailedToc]);
-
+  }, [step, tocExpandedChapters, bookStructure]);
 
   useEffect(() => {
     if (step === 'done' && !isAutoFactChecking && autoFactCheckProgress.status === '') {
@@ -2654,12 +2649,12 @@ ${JSON.stringify({ claims }, null, 2)}
         </div>
       </header>
 
-      <main className="flex-1 p-4 pb-10 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
+      <main className="flex-1 p-4 pb-10 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500 items-start">
 
         {/* Left Panel */}
         <div
-          ref={leftPanelOuterRef}
-          className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
+          ref={leftPanelRef}
+          className={`sidebar-panel flex flex-col min-h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
           ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
           : 'lg:col-span-4'
           } ${step === 'done' ? 'hidden lg:flex' : ''}`}
@@ -3238,9 +3233,8 @@ ${JSON.stringify({ claims }, null, 2)}
         {/* Right Panel: Preview Area */}
         {step !== 'interview' && (
           <div
-            ref={rightPanelOuterRef}
             className={`lg:col-span-8 rounded-xl shadow-2xl flex flex-col overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}
-            style={syncedPanelHeightPx ? { height: `${syncedPanelHeightPx}px`, maxHeight: `${syncedPanelHeightPx}px` } : { height: 'calc(100vh - 100px)', maxHeight: 'calc(100vh - 100px)' }}
+            style={{ height: leftPanelHeight ? `${leftPanelHeight}px` : 'calc(100vh - 100px)', minHeight: 'calc(100vh - 100px)' }}
           >
             <div className={`p-3 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
               <div className="flex items-center gap-2">
