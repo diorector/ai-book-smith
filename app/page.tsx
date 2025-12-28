@@ -264,17 +264,9 @@ export default function BookSmithAI() {
   const [step, setStep] = useState('interview');
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [isPolishing, setIsPolishing] = useState(false);
-
-  const [polishProgress, setPolishProgress] = useState({ current: 0, total: 0 });
-  const [polishStatus, setPolishStatus] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
   const writingAbortRef = useRef<AbortController | null>(null);
   const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
-  const [showPersonaChat, setShowPersonaChat] = useState(false);
-  const [personaChatMessages, setPersonaChatMessages] = useState<{ role: string, content: string }[]>([]);
-  const [personaChatInput, setPersonaChatInput] = useState('');
-  const [isChatLoading, setIsChatLoading] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<keyof typeof THEMES>('coffee');
 
   // Theme Styles
@@ -329,7 +321,6 @@ export default function BookSmithAI() {
   const [coverConceptsLoading, setCoverConceptsLoading] = useState(false);
   const [coverPromptUsed, setCoverPromptUsed] = useState('');
   const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
-  const [editingSection, setEditingSection] = useState(null);
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [isFactCheckModalOpen, setIsFactCheckModalOpen] = useState(false);
 
@@ -1391,25 +1382,6 @@ ${JSON.stringify({ claims }, null, 2)}
     }
   };
 
-  const handleAIEdit = async (key, instruction) => {
-    if (!subsectionContents[key]) return;
-    setEditingSection({ key, loading: true });
-    try {
-      const originalText = subsectionContents[key];
-      const tonePrompt = getTonePrompt();
-      const newContent = await callGemini(
-        originalText,
-        SYSTEM_PROMPTS.editor(originalText, instruction, tonePrompt)
-      );
-      const cleaned = sanitizeManuscript(newContent);
-      setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
-    } catch (e) {
-      alert("AI 수정 실패: " + e.message);
-    } finally {
-      setEditingSection(null);
-    }
-  };
-
   const renderMarkdown = (text) => {
     if (!text) return null;
     const lines = text.split('\n');
@@ -1575,140 +1547,6 @@ ${JSON.stringify({ claims }, null, 2)}
     }
 
     return out;
-  };
-
-  // --- Sequential Polishing Logic ---
-  const handleSequentialPolish = async () => {
-    if (!bookStructure) return;
-    setIsPolishing(true);
-    setPolishStatus('준비 중...');
-
-    // Flatten all subsections to create a sequential list
-    const allSubsections: any[] = [];
-    bookStructure.chapters.forEach((ch, cIdx) => {
-      ch.subsections.forEach((sub, sIdx) => {
-        allSubsections.push({ ...sub, cIdx, sIdx, key: `${ch.chapter_number}_${sub.sub_number}` });
-      });
-    });
-
-    setPolishProgress({ current: 0, total: allSubsections.length });
-
-    // Create AbortController
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    let previousContext = "";
-
-    try {
-      for (let i = 0; i < allSubsections.length; i++) {
-        if (signal.aborted) throw new Error("작업이 중지되었습니다.");
-
-        const sub = allSubsections[i];
-        const currentText = subsectionContents[sub.key];
-
-        setPolishStatus(`${sub.cIdx + 1}장 ${sub.sIdx + 1}절 "${sub.title}" 윤문 중...`);
-
-        // Skip if no content (shouldn't happen if generated)
-        if (!currentText) continue;
-
-        // For the very first section, we don't have previous context, 
-        // but we still might want to "polish" it for tone consistency.
-        // Or we can skip the first one if the user only wants transitions.
-        // Let's polish everything for consistency.
-
-        const tonePrompt = getTonePrompt();
-
-        const response = await fetch('/api/polish', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            currentText,
-            previousContext: previousContext.slice(-3000), // Pass last 3000 chars as context
-            tonePrompt,
-            instruction: i === 0 ? "첫 챕터의 시작입니다. 독자의 흥미를 끌 수 있도록 매력적으로 다듬어주세요." : "이전 내용과 자연스럽게 이어지도록 접속사와 흐름을 다듬어주세요."
-          }),
-          signal
-        });
-
-        if (!response.ok) throw new Error(`Polishing failed at ${sub.title}`);
-
-        const data = await response.json();
-        const refinedText = data.refinedText;
-        const cleaned = sanitizeManuscript(refinedText, { sectionTitle: sub.title });
-
-        // Update content immediately
-        setSubsectionContents(prev => ({ ...prev, [sub.key]: cleaned }));
-
-        // Update context for next iteration
-        previousContext += "\n\n" + refinedText;
-
-        // Update progress
-        setPolishProgress(prev => ({ ...prev, current: i + 1 }));
-      }
-      alert("전체 윤문 작업이 완료되었습니다!");
-    } catch (e: any) {
-      if (e.name === 'AbortError' || e.message === '작업이 중지되었습니다.') {
-        alert("윤문 작업이 중지되었습니다.");
-      } else {
-        console.error(e);
-        alert("윤문 작업 중 오류가 발생했습니다: " + e.message);
-      }
-    } finally {
-      setIsPolishing(false);
-      setPolishStatus('');
-      abortControllerRef.current = null;
-    }
-  };
-
-  const handleStopPolish = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-  };
-
-  // --- Persona Chat Logic ---
-  const handlePersonaChat = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!personaChatInput.trim()) return;
-
-    const userMsg = { role: 'user', content: personaChatInput };
-    setPersonaChatMessages(prev => [...prev, userMsg]);
-    setPersonaChatInput('');
-    setIsChatLoading(true);
-
-    try {
-      const role = TONE_FACTORS.roles.find(r => r.id === toneSettings.role);
-      const tone = TONE_FACTORS.tones.find(t => t.id === toneSettings.tone);
-      const style = TONE_FACTORS.styles.find(s => s.id === toneSettings.style);
-
-      const response = await fetch('/api/chat-persona', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMsg.content,
-          history: personaChatMessages,
-          personaSettings: {
-            roleLabel: role?.label, roleDesc: role?.desc,
-            toneLabel: tone?.label, toneDesc: tone?.desc,
-            styleLabel: style?.label, styleDesc: style?.desc,
-          },
-          bookContext: {
-            title: bookStructure?.title,
-            concept: bookStructure?.concept,
-            step
-          }
-        })
-      });
-
-      if (!response.ok) throw new Error("Chat failed");
-      const data = await response.json();
-      setPersonaChatMessages(prev => [...prev, { role: 'model', content: data.reply }]);
-    } catch (e) {
-      console.error(e);
-      setPersonaChatMessages(prev => [...prev, { role: 'model', content: "죄송합니다. 잠시 생각이 안 나네요. 다시 말씀해 주시겠어요?" }]);
-    } finally {
-      setIsChatLoading(false);
-    }
   };
 
   // --- Export Functions ---
@@ -3393,35 +3231,6 @@ ${JSON.stringify({ claims }, null, 2)}
                 </div>
               )}
 
-              {/* Polishing UI - 간소화 */}
-              {(step === 'done' || step === 'writing') && (
-                <div className={`mt-3 pt-3 border-t ${theme.border}`}>
-                  {isPolishing ? (
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-xs items-center">
-                        <span className="font-medium text-amber-600 flex items-center gap-1">
-                          <Wand2 size={12} className="animate-pulse" /> {polishStatus}
-                        </span>
-                        <span className="opacity-60">{Math.round((polishProgress.current / polishProgress.total) * 100)}%</span>
-                      </div>
-                      <div className="w-full bg-black/10 rounded-full h-1.5 overflow-hidden">
-                        <div className="bg-amber-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${(polishProgress.current / polishProgress.total) * 100}%` }}></div>
-                      </div>
-                      <button onClick={handleStopPolish} className="w-full py-1 text-[10px] text-red-500 hover:underline">
-                        중지
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={handleSequentialPolish}
-                      disabled={loading || isPolishing}
-                      className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 opacity-70 hover:opacity-100 border border-amber-200 text-amber-700 hover:bg-amber-50 transition-all disabled:opacity-30"
-                    >
-                      <Wand2 size={12} /> 전체 윤문
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -3531,7 +3340,6 @@ ${JSON.stringify({ claims }, null, 2)}
                         {ch.subsections.map((sub) => {
                           const key = `${ch.chapter_number}_${sub.sub_number}`;
                           const content = subsectionContents[key];
-                          const isEditingThis = editingSection?.key === key;
 
                           return (
                             <div
@@ -3543,19 +3351,7 @@ ${JSON.stringify({ claims }, null, 2)}
                                 <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
                               </h3>
 
-                              {content && !isEditingThis && (
-                                <div className={`absolute right-0 top-0 opacity-50 hover:opacity-100 transition-opacity shadow-md rounded-lg border p-1 flex gap-1 print:hidden ${theme.previewBg} ${theme.border} bg-opacity-90 backdrop-blur`}>
-                                  <button onClick={() => handleAIEdit(key, "내용을 더 풍부하게 확장해줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="확장"><Wand2 size={14} /></button>
-                                  <button onClick={() => handleAIEdit(key, "내용을 간결하게 요약해줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="요약"><FileText size={14} /></button>
-                                  <button onClick={() => handleAIEdit(key, "문법과 문체를 매끄럽게 다듬어줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="윤문"><Sparkles size={14} /></button>
-                                </div>
-                              )}
-
-                              {isEditingThis ? (
-                                <div className="p-8 border-2 border-indigo-100 rounded-lg bg-indigo-50/30 flex items-center justify-center gap-3 text-indigo-600 animate-pulse">
-                                  <Wand2 className="animate-bounce" /> AI가 문장을 다듬고 있습니다...
-                                </div>
-                              ) : content ? (
+                              {content ? (
                                 <div className="prose prose-lg max-w-none prose-p:leading-loose">
                                   {renderMarkdown(content)}
                                 </div>
@@ -3662,61 +3458,6 @@ ${JSON.stringify({ claims }, null, 2)}
                 </div>
               )}
 
-              {/* Persona Chat Overlay Button */}
-              {(step === 'writing' || step === 'done') && (
-                <div className="absolute bottom-6 right-6 z-40 print:hidden">
-                  <button
-                    onClick={() => {
-                      setShowPersonaChat(!showPersonaChat);
-                      if (personaChatMessages.length === 0) {
-                        setPersonaChatMessages([{ role: 'model', content: "안녕하세요! 집필하시느라 고생이 많으시네요. 어떤 점이 고민되시나요?" }]);
-                      }
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-full shadow-xl flex items-center gap-2 transition-transform hover:scale-105"
-                  >
-                    <User size={24} />
-                    {showPersonaChat ? "대화 닫기" : "페르소나와 대화하기"}
-                  </button>
-                </div>
-              )}
-
-              {/* Persona Chat Window */}
-              {showPersonaChat && (
-                <div className="absolute bottom-20 right-6 w-80 h-96 bg-white rounded-xl shadow-2xl border flex flex-col overflow-hidden z-50 animate-fade-in-up">
-                  <div className="bg-indigo-600 text-white p-3 flex justify-between items-center">
-                    <span className="font-bold text-sm flex items-center gap-2"><Sparkles size={14} /> AI 페르소나</span>
-                    <button onClick={() => setShowPersonaChat(false)}><X size={16} /></button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
-                    {personaChatMessages.map((m, i) => (
-                      <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] p-2 rounded-lg text-sm ${m.role === 'user' ? 'bg-indigo-500 text-white rounded-br-none' : 'bg-white border text-slate-800 rounded-bl-none shadow-sm'}`}>
-                          {m.role === 'user' ? m.content : (renderMarkdown(m.content) || m.content)}
-                        </div>
-                      </div>
-                    ))}
-                    {isChatLoading && (
-                      <div className="flex justify-start">
-                        <div className="bg-white border p-2 rounded-lg rounded-bl-none shadow-sm">
-                          <Loader2 className="animate-spin text-indigo-500" size={16} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <form onSubmit={handlePersonaChat} className="p-2 border-t bg-white flex gap-2">
-                    <input
-                      type="text"
-                      value={personaChatInput}
-                      onChange={(e) => setPersonaChatInput(e.target.value)}
-                      placeholder="메시지를 입력하세요..."
-                      className="flex-1 text-sm border rounded px-2 py-1 outline-none focus:border-indigo-500"
-                    />
-                    <button type="submit" disabled={isChatLoading} className="bg-indigo-600 text-white p-2 rounded hover:bg-indigo-700 disabled:opacity-50">
-                      <Send size={16} />
-                    </button>
-                  </form>
-                </div>
-              )}
           </div>
         )}
       </main>
