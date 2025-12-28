@@ -172,3 +172,121 @@ body {
   line-height: 1.9;
   letter-spacing: -0.01em;
 }
+
+/* Book View (양면 보기) styles - 실제 책처럼 */
+.book-columns-container {
+  column-fill: auto;
+  orphans: 3;
+  widows: 3;
+}
+
+.book-columns-container h1,
+.book-columns-container h2,
+.book-columns-container h3,
+.book-columns-container h4 {
+  break-after: avoid;
+  break-inside: avoid;
+}
+
+.book-columns-container .break-inside-avoid {
+  break-inside: avoid;
+}
+
+/* 본문 스타일 - 양쪽 정렬 (justify) 버전 */
+.book-content p {
+  margin-bottom: 0.8em;
+  text-align: justify;
+  text-indent: 1.2em;
+  word-break: keep-all;
+  line-height: 1.85;
+}
+
+.book-content p:first-child {
+  text-indent: 0;
+}
+
+.book-content h3,
+.book-content h4 {
+  break-after: avoid;
+  break-inside: avoid;
+  margin-top: 1.5em;
+  margin-bottom: 0.6em;
+  font-size: 1.05em;
+}
+
+.book-content ul,
+.book-content ol {
+  margin: 0.8em 0;
+  padding-left: 1.5em;
+}
+
+.book-content li {
+  margin-bottom: 0.4em;
+  line-height: 1.7;
+}
+
+.book-content blockquote {
+  margin: 1em 0;
+  padding: 0.8em 1.2em;
+  border-left: 2px solid currentColor;
+  opacity: 0.85;
+  font-style: italic;
+  background: rgba(0,0,0,0.02);
+}
+
+.book-content > * {
+  break-inside: auto;
+}
+
+.book-content > h3,
+.book-content > h4 {
+  break-inside: avoid;
+  break-after: avoid;
+}
+
+/* 본문 스타일 - 좌측 정렬 (가독성 우선) 버전 */
+.book-content-clean p {
+  margin-bottom: 0.75em;
+  text-align: left;
+  text-indent: 0;
+  word-break: keep-all;
+  line-height: 1.75;
+}
+
+.book-content-clean h3,
+.book-content-clean h4 {
+  break-after: avoid;
+  break-inside: avoid;
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+
+.book-content-clean ul,
+.book-content-clean ol {
+  margin: 0.6em 0;
+  padding-left: 1.3em;
+}
+
+.book-content-clean li {
+  margin-bottom: 0.3em;
+  line-height: 1.65;
+}
+
+.book-content-clean blockquote {
+  margin: 0.8em 0;
+  padding: 0.6em 1em;
+  border-left: 2px solid currentColor;
+  opacity: 0.8;
+  background: rgba(0,0,0,0.02);
+}
+
+.book-content-clean > * {
+  break-inside: auto;
+}
+
+.book-content-clean > h3,
+.book-content-clean > h4 {
+  break-inside: avoid;
+  break-after: avoid;
+}

@@ -180,7 +180,7 @@ const SYSTEM_PROMPTS = {
      - 분량이 부족하면: (a) 구체 사례 1개 추가 (b) 체크리스트/프레임워크 1개 추가 (c) 흔한 오해/반론과 반박 1개 추가 중에서 선택하세요.
      - 금지: 앞 문단을 다른 말로 다시 말하기, 결론을 여러 번 되풀이하기, “결국/요컨대/다시 말해”의 남발.
   2. **챕터 내 일관성:** 이 챕터의 다른 섹션들(${chapter.subsections.filter(s => s.sub_number !== subsection.sub_number).map(s => s.title).join(', ')})과 논리적으로 이어지도록 작성하세요.
-  3. **사족(Meta-text) 절대 금지:** 글의 시작이나 끝에 "[2000자 충족함]", "(현재 분량: ...)", "다음 챕터에서는...", "이상으로..." 같은 시스템 메시지나 작가의 말을 절대 포함하지 마세요. **오직 순수한 원고 본문만 출력하세요.**
+  3. **사족(Meta-text) 절대 금지:** 글의 시작이나 끝에 "[2000자 충족함]", "(현재 분량: ...)", "(공백 포함 ...자)", "다음 챕터에서는...", "이상으로..." 같은 시스템 메시지나 글자 수 보고를 절대 포함하지 마세요. **오직 순수한 원고 본문만 출력하세요.**
   4. **LaTeX 수식 금지:** $$...$$나 \\text{} 같은 수식 코드를 절대 사용하지 마세요. 모든 수식이나 도식은 '글(텍스트)'로 풀어서 설명하세요.
   5. **코드 블록 금지:** 원고 본문에는 \`\`\` 사용 금지. 단, 맨 마지막에 FACTS_JSON 블록 1개만 예외로 허용됩니다.
   6. Markdown 형식을 사용하되, 최상위 제목(#)은 쓰지 마세요. 소제목은 ###를 사용하세요.
@@ -336,6 +336,7 @@ export default function BookSmithAI() {
   // Detailed TOC (after writing)
   const [showDetailedToc, setShowDetailedToc] = useState(false);
   const [tocExpandedChapters, setTocExpandedChapters] = useState<Record<number, boolean>>({});
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [syncedPanelHeightPx, setSyncedPanelHeightPx] = useState<number | null>(null);
 
@@ -421,35 +422,49 @@ export default function BookSmithAI() {
 
     // 1) Remove common meta/length markers anywhere
     let t = text
-      // (2,105자) / (2105자) / 2,105자
-      .replace(/\(\s*\d[\d,]*\s*자\s*\)/g, "")
-      .replace(/\b\d[\d,]*\s*자\b/g, "")
+      // Remove patterns like (공백 포함 2,105자), (2,105자), (공백 제외 1,500자)
+      .replace(/\(\s*(공백\s*[포함제외]\s*)?\d[\d,]*\s*자\s*\)/g, "")
+      // Remove standalone patterns like 2,105자, 공백 포함 2,105자
+      .replace(/(공백\s*[포함제외]\s*)?\d[\d,]*\s*자/g, "")
       // "현재 분량: ..." style
       .replace(/\(현재\s*분량\s*:\s*[^)]*\)/g, "")
       // stray double spaces from removals
       .replace(/[ \t]{2,}/g, " ");
 
-    // 2) Normalize "word_word" into "word word" (prevents underscore joins)
-    t = t.replace(/([0-9A-Za-z가-힣])_([0-9A-Za-z가-힣])/g, "$1 $2");
-
-    // 3) Drop redundant heading lines that repeat the current subsection title
+    // 2) Aggressively remove stray asterisks and markdown bold/italic markers from the body
+    // as per the "No emphasis markers" rule, but preserve list bullets.
     const lines = t.split("\n");
     const cleaned: string[] = [];
     let skippedTitleOnce = false;
+
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
-      const raw = line.trim();
-      if (!raw) { cleaned.push(line); continue; }
+      const trimmed = line.trim();
+      if (!trimmed) {
+        cleaned.push("");
+        continue;
+      }
 
-      // Remove lines that are just separators
-      if (/^[-–—]{2,}$/.test(raw)) { cleaned.push("---"); continue; }
+      // Handle list items specifically
+      const listMatch = line.match(/^(\s*[-*]\s+)(.*)$/);
+      if (listMatch) {
+        const prefix = listMatch[1]; // e.g., "* " or "  - "
+        let content = listMatch[2];
+        // Remove all asterisks and underscores from the content of the list item
+        content = content.replace(/[*_]/g, "").replace(/:\s+/g, ": ").trim();
+        line = `${prefix}${content}`;
+      } else {
+        // Not a list item, remove all asterisks and underscores
+        line = line.replace(/[*_]/g, "").replace(/:\s+/g, ": ").trim();
+      }
 
-      // If model repeats the subsection title as a heading or bullet early in the section, drop it once
+      // 3) Drop redundant heading lines that repeat the current subsection title
+      const rawForTitleCheck = line.trim();
       if (!skippedTitleOnce && sectionTitle) {
-        const stripped = raw
+        const stripped = rawForTitleCheck
           .replace(/^#{1,6}\s*/, "")
           .replace(/^§\s*/, "")
-          .replace(/^\d+[-.]\d+\s*/, "") // 7-4 / 7.4
+          .replace(/^\d+[-.]\d+\s*/, "")
           .trim();
         if (stripped === sectionTitle || stripped.endsWith(sectionTitle)) {
           skippedTitleOnce = true;
@@ -457,16 +472,16 @@ export default function BookSmithAI() {
         }
       }
 
-      // 4) Demote any '#' headings to '###' (we never want raw '#' visible)
-      if (/^#{1,6}\s+/.test(raw)) {
-        const title = raw.replace(/^#{1,6}\s+/, "").trim();
+      // 4) Normalize headings
+      if (/^#{1,6}\s+/.test(rawForTitleCheck)) {
+        const title = rawForTitleCheck.replace(/^#{1,6}\s+/, "").trim();
         line = `### ${title}`;
       }
 
       cleaned.push(line);
     }
 
-    return cleaned.join("\n").replace(/[ \t]+\n/g, "\n").trim();
+    return cleaned.join("\n").trim();
   };
 
   const openWebSearch = (q: string) => {
@@ -585,6 +600,13 @@ ${JSON.stringify({ claims }, null, 2)}
       try { ro?.disconnect?.(); } catch {}
     };
   }, [step, showDetailedToc]);
+
+
+  useEffect(() => {
+    if (step === 'done' && !isAutoFactChecking && autoFactCheckProgress.status === '') {
+      setAutoFactCheckProgress(prev => ({ ...prev, status: '팩트체크 완료' }));
+    }
+  }, [step, isAutoFactChecking]);
 
   const handleFactCheckRewrite = async (key: string) => {
     if (!subsectionContents[key]) return;
@@ -729,6 +751,7 @@ ${JSON.stringify({ claims }, null, 2)}
         if (parsed.writingFeedback) setWritingFeedback(parsed.writingFeedback);
         if (parsed.showFeedbackInput !== undefined) setShowFeedbackInput(parsed.showFeedbackInput);
         if (parsed.feedbackChatMessages) setFeedbackChatMessages(parsed.feedbackChatMessages);
+        if (parsed.autoFactCheckProgress) setAutoFactCheckProgress(parsed.autoFactCheckProgress);
         if (typeof parsed.showDetailedToc === 'boolean') setShowDetailedToc(parsed.showDetailedToc);
         if (parsed.tocExpandedChapters && typeof parsed.tocExpandedChapters === 'object') {
           setTocExpandedChapters(parsed.tocExpandedChapters);
@@ -768,6 +791,7 @@ ${JSON.stringify({ claims }, null, 2)}
       feedbackChatMessages,
       showDetailedToc,
       tocExpandedChapters,
+      autoFactCheckProgress,
       ...overrides,
     });
 
@@ -992,7 +1016,10 @@ ${JSON.stringify({ claims }, null, 2)}
     // 1순위: 웹 근거 기반 (/api/fact-check-web)
     // 실패 시: 로컬 보수적 안정화(단정/수치/인용 완화 or 제거) fallback
     const keys = Object.keys(factClaimsBySection || {}).filter((k) => (factClaimsBySection[k] || []).length > 0);
-    if (keys.length === 0) return;
+    if (keys.length === 0) {
+      setAutoFactCheckProgress({ current: 0, total: 0, status: '팩트체크 완료 (검증 대상 없음)' });
+      return;
+    }
 
     setIsAutoFactChecking(true);
     setAutoFactCheckProgress({
@@ -1374,7 +1401,8 @@ ${JSON.stringify({ claims }, null, 2)}
         originalText,
         SYSTEM_PROMPTS.editor(originalText, instruction, tonePrompt)
       );
-      setSubsectionContents(prev => ({ ...prev, [key]: newContent }));
+      const cleaned = sanitizeManuscript(newContent);
+      setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
     } catch (e) {
       alert("AI 수정 실패: " + e.message);
     } finally {
@@ -1465,17 +1493,21 @@ ${JSON.stringify({ claims }, null, 2)}
         .replace(/\$\$/g, '')
         .replace(/\\text\{([^}]+)\}/g, '$1')
         .replace(/([0-9A-Za-z가-힣])_([0-9A-Za-z가-힣])/g, '$1 $2');
-      if (cleanLine.match(/^#\s?/)) {
+      const headerMatch = cleanLine.match(/^(#{1,6})\s+(.*)$/);
+      if (headerMatch) {
         inReferences = false;
-        elements.push(<h2 key={i} className={`text-2xl font-bold mt-12 mb-6 ${theme.previewText} border-b pb-2 ${theme.border}`}>{parseInline(cleanLine.replace(/^#\s?/, ''))}</h2>); continue;
-      }
-      if (cleanLine.match(/^###\s?/)) {
-        inReferences = false;
-        elements.push(<h3 key={i} className={`text-xl font-bold mt-10 mb-4 ${theme.previewText} flex items-center gap-2`}><span className={`opacity-40 text-2xl select-none ${theme.accent}`}>§</span>{parseInline(cleanLine.replace(/^###\s?/, ''))}</h3>); continue;
-      }
-      if (cleanLine.match(/^##\s?/)) {
-        inReferences = false;
-        elements.push(<h2 key={i} className={`text-2xl font-bold mt-12 mb-6 ${theme.previewText} border-b pb-2 ${theme.border}`}>{parseInline(cleanLine.replace(/^##\s?/, ''))}</h2>); continue;
+        const level = headerMatch[1].length;
+        const content = headerMatch[2];
+        if (level === 1) {
+          elements.push(<h1 key={i} className={`text-2xl font-bold mt-10 mb-6 ${theme.previewText} border-b-2 pb-2 ${theme.border}`}>{parseInline(content)}</h1>);
+        } else if (level === 2) {
+          elements.push(<h2 key={i} className={`text-xl font-bold mt-8 mb-4 ${theme.previewText} border-b pb-1 ${theme.border}`}>{parseInline(content)}</h2>);
+        } else if (level === 3) {
+          elements.push(<h3 key={i} className={`text-lg font-bold mt-6 mb-2 ${theme.previewText} flex items-center gap-2`}><span className={`opacity-40 text-xl select-none ${theme.accent}`}>§</span>{parseInline(content)}</h3>);
+        } else {
+          elements.push(<h4 key={i} className={`text-base font-bold mt-4 mb-2 ${theme.previewText} opacity-90`}>{parseInline(content)}</h4>);
+        }
+        continue;
       }
       if (trimmedLine.match(/^[-*]\s/)) {
         const content = cleanLine.replace(/^[-*]\s/, '');
@@ -1602,9 +1634,10 @@ ${JSON.stringify({ claims }, null, 2)}
 
         const data = await response.json();
         const refinedText = data.refinedText;
+        const cleaned = sanitizeManuscript(refinedText, { sectionTitle: sub.title });
 
         // Update content immediately
-        setSubsectionContents(prev => ({ ...prev, [sub.key]: refinedText }));
+        setSubsectionContents(prev => ({ ...prev, [sub.key]: cleaned }));
 
         // Update context for next iteration
         previousContext += "\n\n" + refinedText;
@@ -2176,25 +2209,65 @@ ${JSON.stringify({ claims }, null, 2)}
          \n\n${historyText}`,
         SYSTEM_PROMPTS.architect
       );
+      
+      // JSON 추출: 가장 바깥쪽 { } 블록 찾기
       const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        setBookStructure(parsed);
-        setStep('outline');
-        if (parsed.chapters.length > 0) setExpandedChapters({ 0: true });
+      if (!jsonMatch) {
+        throw new Error("응답에서 JSON 객체를 찾을 수 없습니다. 다시 시도해 주세요.");
+      }
+      
+      let jsonStr = jsonMatch[0];
+      let parsed;
+      
+      // 1차 시도: 원본 그대로 파싱
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (e1) {
+        console.warn("1차 JSON 파싱 실패, 정제 시도:", e1);
         
-        // 책 제목이 생성되면 프로젝트 이름 업데이트
-        if (parsed.title && currentProjectId) {
-          const updatedProjects = projects.map(p => 
-            p.id === currentProjectId 
-              ? { ...p, name: parsed.title.substring(0, 30), updatedAt: Date.now() }
-              : p
-          );
-          setProjects(updatedProjects);
-          localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+        // 2차 시도: trailing comma만 제거
+        try {
+          jsonStr = jsonMatch[0].replace(/,(\s*[\]}])/g, '$1');
+          parsed = JSON.parse(jsonStr);
+        } catch (e2) {
+          console.warn("2차 JSON 파싱 실패:", e2);
+          
+          // 3차 시도: 줄바꿈을 공백으로, 더블 이스케이프 정리
+          try {
+            jsonStr = jsonMatch[0]
+              .replace(/\r?\n/g, ' ')
+              .replace(/\t/g, ' ')
+              .replace(/,(\s*[\]}])/g, '$1');
+            parsed = JSON.parse(jsonStr);
+          } catch (e3) {
+            console.error("모든 JSON 파싱 시도 실패:", e3);
+            throw new Error("AI 응답의 JSON 형식이 올바르지 않습니다. 다시 시도해 주세요.");
+          }
         }
-      } else { throw new Error("JSON parsing failed"); }
-    } catch (error) { alert("목차 생성 실패: " + error.message); } finally { setLoading(false); }
+      }
+      
+      if (!parsed || !parsed.chapters) {
+        throw new Error("목차 구조가 올바르지 않습니다. chapters 배열이 없습니다.");
+      }
+        
+      setBookStructure(parsed);
+      setStep('outline');
+      if (parsed.chapters?.length > 0) setExpandedChapters({ 0: true });
+      
+      // 책 제목이 생성되면 프로젝트 이름 업데이트
+      if (parsed.title && currentProjectId) {
+        const updatedProjects = projects.map(p => 
+          p.id === currentProjectId 
+            ? { ...p, name: parsed.title.substring(0, 30), updatedAt: Date.now() }
+            : p
+        );
+        setProjects(updatedProjects);
+        localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
+      }
+    } catch (error: any) { 
+      console.error("목차 생성 오류:", error);
+      alert("목차 생성 실패: " + (error?.message || String(error)) + "\n\n다시 시도해 주세요."); 
+    } finally { setLoading(false); }
   };
 
   const toggleChapter = (idx) => setExpandedChapters(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -2743,20 +2816,39 @@ ${JSON.stringify({ claims }, null, 2)}
         </div>
       </header>
 
-      <main className="flex-1 p-4 pb-20 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
+      <main className="flex-1 p-4 pb-10 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
 
         {/* Left Panel */}
         <div
           ref={leftPanelOuterRef}
           className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
           ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
-          : 'lg:col-span-5'
+          : 'lg:col-span-4'
           } ${step === 'done' ? 'hidden lg:flex' : ''}`}
         >
-          <div className={`flex justify-between p-3 rounded-lg border text-xs font-mono ${theme.panel} ${theme.border} opacity-70`}>
-            <span className={step === 'interview' ? 'font-bold underline' : ''}>1.Design</span>
-            <span className={step === 'outline' ? 'font-bold underline' : ''}>2.Structure</span>
-            <span className={step === 'writing' ? 'font-bold underline' : ''}>3.Deep Write</span>
+          {/* 단계 표시 - 활성화 대비 강화 */}
+          <div className={`flex items-center gap-1 p-1 rounded-lg border text-xs ${theme.panel} ${theme.border}`}>
+            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${
+              step === 'interview' 
+                ? 'bg-indigo-500 text-white font-bold shadow-sm' 
+                : 'opacity-40'
+            }`}>
+              1. 기획
+            </div>
+            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${
+              step === 'outline' 
+                ? 'bg-indigo-500 text-white font-bold shadow-sm' 
+                : 'opacity-40'
+            }`}>
+              2. 구조
+            </div>
+            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${
+              (step === 'writing' || step === 'done') 
+                ? 'bg-indigo-500 text-white font-bold shadow-sm' 
+                : 'opacity-40'
+            }`}>
+              3. 집필
+            </div>
           </div>
 
           {step === 'interview' && (
@@ -3007,7 +3099,18 @@ ${JSON.stringify({ claims }, null, 2)}
                 </div>
               </div>
 
-              {/* Fact-check runs automatically in the background (hidden from user) */}
+              {/* Fact-check 상태 - 간소화 */}
+              {(isAutoFactChecking || autoFactCheckProgress.status.includes('완료')) && (
+                <div className={`mb-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs ${isAutoFactChecking ? 'bg-indigo-500/10' : 'bg-green-500/10'}`}>
+                  {isAutoFactChecking ? <Loader2 size={12} className="animate-spin text-indigo-500" /> : <CheckCircle size={12} className="text-green-600" />}
+                  <span className={`font-medium ${isAutoFactChecking ? 'text-indigo-600' : 'text-green-700'}`}>
+                    {isAutoFactChecking ? '팩트체크 중...' : '검증 완료'}
+                  </span>
+                  {autoFactCheckProgress.total > 0 && (
+                    <span className="opacity-50 ml-auto">{autoFactCheckProgress.current}/{autoFactCheckProgress.total}</span>
+                  )}
+                </div>
+              )}
 
               {showRecoveryBanner && (step === 'writing' || progress.status === 'stopped') && (
                 <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
@@ -3038,104 +3141,87 @@ ${JSON.stringify({ claims }, null, 2)}
                 </div>
               )}
 
-              <div className="mb-2 flex justify-between text-xs opacity-70">
-                <span>Progress</span>
-                <span>{progress.total > 0 ? `${Math.round((progress.current / progress.total) * 100)}%` : '0%'} ({progress.current}/{progress.total} sections)</span>
-              </div>
-              <div className="w-full bg-black/20 rounded-full h-2.5 mb-6 overflow-hidden">
-                <div
-                  className={`h-2.5 rounded-full transition-all duration-500 ${progress.status === 'test-complete' ? 'bg-amber-500' : 'bg-indigo-500'}`}
-                  style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
-                ></div>
-              </div>
-              {canShowDetailedToc && (
-                <div className="mb-4 relative">
-                  <div className={`rounded-lg border overflow-hidden ${theme.border} ${theme.bg}`}>
-                    <button
-                      onClick={toggleDetailedToc}
-                      className="w-full flex items-center justify-between px-3 py-2 text-sm font-bold hover:bg-black/5"
-                      title="집필 완료 후에도 세부 목차(소제목)를 다시 확인할 수 있어요."
-                    >
-                      <span className="flex items-center gap-2">
-                        {showDetailedToc ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        세부 목차 {showDetailedToc ? '숨기기' : '보기'}
-                      </span>
-                      <span className="text-[11px] opacity-60 font-normal">클릭하면 우측 원고로 이동</span>
-                    </button>
-                  </div>
-
-                  {showDetailedToc && (
-                    <div
-                      className={`absolute left-0 right-0 top-full mt-2 rounded-lg border shadow-xl z-30 ${theme.panel} ${theme.border}`}
-                    >
-                      <div className="max-h-[45vh] overflow-y-auto p-2 space-y-2">
-                        {bookStructure.chapters.map((ch: any, chIdx: number) => (
-                          <div key={ch.chapter_number} className={`rounded-lg border ${theme.border} bg-black/5 overflow-hidden`}>
-                            <button
-                              onClick={() => toggleTocChapter(chIdx)}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-black/5"
-                            >
-                              {tocExpandedChapters[chIdx] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${theme.bg} ${theme.accent}`}>CH.{ch.chapter_number}</span>
-                              <span className="text-sm font-semibold truncate">{ch.title}</span>
-                            </button>
-                            {tocExpandedChapters[chIdx] && (
-                              <div className={`p-2 border-t ${theme.border} ${theme.bg}`}>
-                                <div className="space-y-1">
-                                  {ch.subsections.map((sub: any) => {
-                                    const key = `${ch.chapter_number}_${sub.sub_number}`;
-                                    const hasContent = !!subsectionContents[key];
-                                    return (
-                                      <button
-                                        key={sub.sub_number}
-                                        onClick={() => jumpToSection(ch.chapter_number, sub.sub_number)}
-                                        className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left text-xs hover:bg-black/5`}
-                                        title={sub.detail || sub.title}
-                                      >
-                                        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full ${hasContent ? 'bg-green-500' : 'bg-slate-500'}`} />
-                                        <span className="opacity-70 font-mono shrink-0">{sub.sub_number.toString().padStart(2, '0')}</span>
-                                        <span className="flex-1 leading-snug">{sub.title}</span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+              {/* 진행률 - 심플 프로그레스 바 */}
+              <div className="mb-3">
+                <div className="flex justify-between items-center text-xs mb-1.5">
+                  <span className="font-semibold opacity-70">진행률</span>
+                  <span className="font-mono text-[11px] opacity-60">
+                    {progress.total > 0 ? `${Math.round((progress.current / progress.total) * 100)}%` : '0%'}
+                  </span>
                 </div>
-              )}
-              <div ref={leftProgressScrollRef} className={`flex-1 overflow-y-auto space-y-2 border-t pt-4 ${theme.border}`}>
-                {bookStructure.chapters.map(ch => {
+                <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className="h-2 bg-indigo-500 rounded-full transition-all duration-500"
+                    style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* 목차 - 가독성 개선 */}
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold opacity-70">목차</span>
+                <span className="text-[10px] opacity-40">{progress.current}/{progress.total} 섹션</span>
+              </div>
+              <div ref={leftProgressScrollRef} className={`flex-1 overflow-y-auto space-y-0.5 border-t pt-2 ${theme.border}`}>
+                {bookStructure.chapters.map((ch: any, chIdx: number) => {
                   const isActiveCh = activeSectionKey ? activeSectionKey.startsWith(`${ch.chapter_number}_`) : false;
+                  const chapterProgress = ch.subsections.filter((sub: any) => !!subsectionContents[`${ch.chapter_number}_${sub.sub_number}`]).length;
+                  const isComplete = chapterProgress === ch.subsections.length;
                   return (
-                  <div
-                    key={ch.chapter_number}
-                    id={`left-ch-${ch.chapter_number}`}
-                    className={`text-sm rounded-md px-2 py-1 transition-colors ${isActiveCh ? 'bg-indigo-500/10' : ''}`}
-                  >
-                    <div className={`font-bold mb-1 flex items-center justify-between ${isActiveCh ? 'opacity-100' : 'opacity-60'}`}>
-                      <span>CH.{ch.chapter_number} {ch.title}</span>
-                      {isActiveCh && <span className="text-[11px] opacity-60">읽는 중</span>}
+                    <div
+                      key={ch.chapter_number}
+                      id={`left-ch-${ch.chapter_number}`}
+                      className="group"
+                    >
+                      <button
+                        onClick={() => toggleTocChapter(chIdx)}
+                        className={`w-full flex items-center gap-2 px-2 py-2 text-left rounded-lg transition-all ${
+                          isActiveCh 
+                            ? 'bg-indigo-500/15 border-l-2 border-indigo-500' 
+                            : 'hover:bg-black/5 border-l-2 border-transparent'
+                        }`}
+                      >
+                        {tocExpandedChapters[chIdx] ? <ChevronDown size={12} className="opacity-40 shrink-0" /> : <ChevronRight size={12} className="opacity-40 shrink-0" />}
+                        <span className={`text-xs font-bold ${isActiveCh ? 'text-indigo-600' : 'opacity-50'}`}>{ch.chapter_number}</span>
+                        <span className={`text-[12px] truncate flex-1 ${isActiveCh ? 'font-semibold' : 'opacity-80'}`}>{ch.title}</span>
+                        {isComplete ? (
+                          <CheckCircle size={12} className="text-green-500 shrink-0" />
+                        ) : (
+                          <span className="text-[10px] opacity-40 shrink-0">{chapterProgress}/{ch.subsections.length}</span>
+                        )}
+                      </button>
+                      
+                      {/* 소제목 리스트 */}
+                      {tocExpandedChapters[chIdx] && (
+                        <div className="ml-6 pl-3 border-l border-dashed space-y-0.5 py-1 mb-1">
+                          {ch.subsections.map((sub: any) => {
+                            const key = `${ch.chapter_number}_${sub.sub_number}`;
+                            const hasContent = !!subsectionContents[key];
+                            const isActive = activeSectionKey === key;
+                            return (
+                              <button
+                                key={sub.sub_number}
+                                onClick={() => jumpToSection(ch.chapter_number, sub.sub_number)}
+                                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[11px] transition-all ${
+                                  isActive 
+                                    ? 'bg-indigo-500/20 font-semibold text-indigo-700' 
+                                    : 'hover:bg-black/5 opacity-75 hover:opacity-100'
+                                }`}
+                              >
+                                {hasContent ? (
+                                  <CheckCircle size={10} className="text-green-500 shrink-0" />
+                                ) : (
+                                  <span className="w-2.5 h-2.5 rounded-full border border-current opacity-30 shrink-0" />
+                                )}
+                                <span className="truncate">{sub.title}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                    <div className="grid grid-cols-5 gap-1">
-                      {ch.subsections.map(sub => {
-                        const key = `${ch.chapter_number}_${sub.sub_number}`;
-                        const hasContent = !!subsectionContents[key];
-                        return (
-                          <div
-                            key={sub.sub_number}
-                            className={`h-1.5 rounded-sm transition-colors ${hasContent ? 'bg-green-500' : 'bg-slate-700 animate-pulse'}`}
-                            title={sub.title}
-                          />
-                        )
-                      })}
-                    </div>
-                  </div>
-                )})}
+                  );
+                })}
               </div>
               {/* 피드백 입력 UI (테스트 모드 완료 후) */}
               {progress.status === 'test-complete' && showFeedbackInput && (
@@ -3253,69 +3339,85 @@ ${JSON.stringify({ claims }, null, 2)}
 
               {step === 'done' && (
                 <div className="space-y-2 mt-4">
+                  {/* 팩트체크 버튼 - 작게 */}
                   <button
                     onClick={() => setIsFactCheckModalOpen(true)}
-                    className={`w-full py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 border ${theme.border} hover:bg-black/5`}
-                    title="검증이 필요한 주장(숫자/연도/인용/연구결과 등)을 모아서 검색/수정할 수 있어요."
+                    className="w-full py-1.5 rounded-md text-xs flex items-center justify-center gap-1.5 opacity-60 hover:opacity-100 transition-opacity"
+                    title="검증이 필요한 주장 확인"
                   >
-                    <Sliders size={16} /> 팩트체크 (검증 필요 항목 보기)
+                    <Sliders size={12} /> 팩트체크 항목 보기
                   </button>
-                  <button onClick={downloadBook} className="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2">
-                    <FileText size={16} /> 마크다운 (.md) 다운로드
-                  </button>
-                  <button
-                    onClick={handleExportEPUB}
-                    disabled={exporting}
-                    className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${theme.button}`}
-                  >
-                    {exporting ? <Loader2 className="animate-spin" size={18} /> : <BookOpen size={18} />} EPUB2 전자책 출판하기
-                  </button>
-                  <button
-                    onClick={handleExportDOCX}
-                    disabled={exporting}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2"
-                  >
-                    {exporting ? <Loader2 className="animate-spin" size={16} /> : <File size={16} />} 워드 (.docx) 저장
-                  </button>
-                  <button onClick={handlePrintPDF} className="w-full bg-white text-slate-900 hover:bg-slate-100 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2">
-                    <Printer size={16} /> 인쇄 / PDF 저장
-                  </button>
+                  
+                  {/* 내보내기 통합 드롭다운 */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowExportDropdown(!showExportDropdown)}
+                      className={`w-full py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 ${theme.button}`}
+                    >
+                      {exporting ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                      내보내기
+                      <ChevronDown size={14} className={`transition-transform ${showExportDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    
+                    {showExportDropdown && (
+                      <div className={`absolute bottom-full left-0 right-0 mb-1 rounded-lg border shadow-xl overflow-hidden z-20 ${theme.panel} ${theme.border}`}>
+                        <button
+                          onClick={() => { handleExportEPUB(); setShowExportDropdown(false); }}
+                          disabled={exporting}
+                          className="w-full px-3 py-2.5 text-sm text-left hover:bg-black/5 flex items-center gap-2 disabled:opacity-50"
+                        >
+                          <BookOpen size={14} /> EPUB 전자책
+                        </button>
+                        <button
+                          onClick={() => { handleExportDOCX(); setShowExportDropdown(false); }}
+                          disabled={exporting}
+                          className="w-full px-3 py-2.5 text-sm text-left hover:bg-black/5 flex items-center gap-2 border-t border-black/5 disabled:opacity-50"
+                        >
+                          <File size={14} /> Word (.docx)
+                        </button>
+                        <button
+                          onClick={() => { downloadBook(); setShowExportDropdown(false); }}
+                          className="w-full px-3 py-2.5 text-sm text-left hover:bg-black/5 flex items-center gap-2 border-t border-black/5"
+                        >
+                          <FileText size={14} /> Markdown (.md)
+                        </button>
+                        <button
+                          onClick={() => { handlePrintPDF(); setShowExportDropdown(false); }}
+                          className="w-full px-3 py-2.5 text-sm text-left hover:bg-black/5 flex items-center gap-2 border-t border-black/5"
+                        >
+                          <Printer size={14} /> 인쇄 / PDF
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* Polishing UI */}
+              {/* Polishing UI - 간소화 */}
               {(step === 'done' || step === 'writing') && (
-                <div className={`mt-4 border-t pt-4 ${theme.border}`}>
-                  <h4 className="font-bold text-sm mb-2 flex items-center gap-2">
-                    <Sparkles size={14} className="text-amber-500" /> 전체 윤문 (Polishing)
-                  </h4>
-                  <p className="text-xs opacity-70 mb-3">
-                    앞 챕터의 내용을 바탕으로 뒤 챕터를 다듬어, 책 전체의 연결성과 일관성을 높입니다.
-                  </p>
-
+                <div className={`mt-3 pt-3 border-t ${theme.border}`}>
                   {isPolishing ? (
-                    <div className="space-y-3">
-                      <div className="flex justify-between text-xs items-end">
-                        <span className="font-bold text-amber-600 animate-pulse">{polishStatus}</span>
-                        <span>{Math.round((polishProgress.current / polishProgress.total) * 100)}%</span>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs items-center">
+                        <span className="font-medium text-amber-600 flex items-center gap-1">
+                          <Wand2 size={12} className="animate-pulse" /> {polishStatus}
+                        </span>
+                        <span className="opacity-60">{Math.round((polishProgress.current / polishProgress.total) * 100)}%</span>
                       </div>
-                      <div className="w-full bg-black/10 rounded-full h-2 overflow-hidden">
-                        <div className="bg-amber-500 h-2 rounded-full transition-all duration-300" style={{ width: `${(polishProgress.current / polishProgress.total) * 100}%` }}></div>
+                      <div className="w-full bg-black/10 rounded-full h-1.5 overflow-hidden">
+                        <div className="bg-amber-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${(polishProgress.current / polishProgress.total) * 100}%` }}></div>
                       </div>
-                      <button
-                        onClick={handleStopPolish}
-                        className="w-full py-1 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50 transition-colors"
-                      >
-                        작업 중지
+                      <button onClick={handleStopPolish} className="w-full py-1 text-[10px] text-red-500 hover:underline">
+                        중지
                       </button>
                     </div>
                   ) : (
                     <button
                       onClick={handleSequentialPolish}
                       disabled={loading || isPolishing}
-                      className={`w-full py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 border transition-colors ${theme.button === 'bg-slate-900 text-white' ? 'bg-amber-600 text-white border-transparent hover:bg-amber-700' : 'bg-amber-100 text-amber-900 border-amber-200 hover:bg-amber-200'}`}
+                      className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 opacity-70 hover:opacity-100 border border-amber-200 text-amber-700 hover:bg-amber-50 transition-all disabled:opacity-30"
                     >
-                      <Wand2 size={14} /> 순차적 윤문 시작하기
+                      <Wand2 size={12} /> 전체 윤문
                     </button>
                   )}
                 </div>
@@ -3328,162 +3430,155 @@ ${JSON.stringify({ claims }, null, 2)}
         {step !== 'interview' && (
           <div
             ref={rightPanelOuterRef}
-            className={`lg:col-span-7 rounded-xl shadow-2xl flex flex-col overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}
+            className={`lg:col-span-8 rounded-xl shadow-2xl flex flex-col overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}
             style={syncedPanelHeightPx ? { height: `${syncedPanelHeightPx}px`, maxHeight: `${syncedPanelHeightPx}px` } : { height: 'calc(100vh - 100px)', maxHeight: 'calc(100vh - 100px)' }}
           >
-            <div className={`p-4 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
+            <div className={`p-3 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
               <div className="flex items-center gap-2">
-                <FileText size={18} className="opacity-50" />
-                <span className="font-ui font-bold tracking-tight">Manuscript Preview</span>
+                <FileText size={16} className="opacity-50" />
+                <span className="font-ui font-semibold text-sm">원고 미리보기</span>
               </div>
-              <div className="flex items-center gap-3 text-xs font-mono opacity-50">
+              <div className="flex items-center gap-3 text-xs opacity-50">
                 {step === 'done' && (
-                  <button onClick={handlePrintPDF} className="flex items-center gap-1 hover:text-indigo-600">
-                    <Printer size={14} /> Print/PDF
+                  <button onClick={handlePrintPDF} className="flex items-center gap-1 hover:text-indigo-600 font-medium">
+                    <Printer size={12} /> 인쇄/PDF
                   </button>
                 )}
-                <span>|</span>
-                <span>A4 {Math.round(progress.current * 0.8)} pages est.</span>
+                <span className="font-mono">약 {Math.round(progress.current * 0.8)}p</span>
               </div>
             </div>
 
+            {/* Preview Content */}
             <div
               id="printable-area"
               ref={previewScrollRef}
-              className={`flex-1 overflow-y-auto px-16 py-14 pb-32 print:p-0 print:overflow-visible ${theme.previewText} font-book`}
+              className={`flex-1 overflow-y-auto px-8 md:px-12 py-14 pb-12 print:p-0 print:overflow-visible ${theme.previewText} font-book`}
             >
               {bookStructure ? (
-                <div className="max-w-3xl mx-auto space-y-12 print:max-w-none">
-                  {coverImage && (
-                    <div className="mb-12 print:break-after-page flex flex-col items-center">
-                      <div
-                        className="shadow-2xl rounded overflow-hidden w-80 md:w-[420px] border-8 border-white relative"
-                        style={{ aspectRatio: '2 / 3' }} // Book cover ratio
-                      >
-                        <img 
-                          src={coverImage} 
-                          alt="Book Cover" 
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            console.error("이미지 로딩 실패:", e);
-                            alert("표지 이미지를 표시할 수 없습니다. 이미지가 손상되었거나 너무 클 수 있습니다.");
-                            setCoverImage(null);
-                          }}
-                          loading="lazy"
-                        />
+                  <div className="max-w-4xl mx-auto space-y-12 print:max-w-none">
+                    {coverImage && (
+                      <div className="mb-12 print:break-after-page flex flex-col items-center">
+                        <div
+                          className="shadow-2xl rounded overflow-hidden w-80 md:w-[420px] border-8 border-white relative"
+                          style={{ aspectRatio: '2 / 3' }}
+                        >
+                          <img 
+                            src={coverImage} 
+                            alt="Book Cover" 
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              console.error("이미지 로딩 실패:", e);
+                              alert("표지 이미지를 표시할 수 없습니다.");
+                              setCoverImage(null);
+                            }}
+                            loading="lazy"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
+                      <h1 className="text-5xl md:text-6xl font-bold mb-6 tracking-tight">{bookStructure.title}</h1>
+                      <p className="text-2xl italic opacity-70 leading-relaxed">{bookStructure.concept}</p>
+                      <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-ui font-bold uppercase tracking-widest ${theme.accent}`}>
+                        <span>Written by AI Book Smith</span>
+                        <span>•</span>
+                        <span>{TONE_FACTORS.roles.find(r => r.id === toneSettings.role)?.label}</span>
                       </div>
                     </div>
-                  )}
 
-                  <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
-                    <h1 className="text-5xl md:text-6xl font-bold mb-6 tracking-tight">{bookStructure.title}</h1>
-                    <p className="text-2xl italic opacity-70 leading-relaxed">{bookStructure.concept}</p>
-                    <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-ui font-bold uppercase tracking-widest ${theme.accent}`}>
-                      <span>Written by AI Book Smith</span>
-                      <span>•</span>
-                      <span>{TONE_FACTORS.roles.find(r => r.id === toneSettings.role).label}</span>
-                    </div>
-                  </div>
-
-                  {/* Table of Contents (visible in preview + print + exports) */}
-                  <div className={`mb-16 print:break-after-page ${theme.border}`}>
-                    <div className="text-center mb-8">
-                      <div className="text-[11px] tracking-[0.35em] uppercase opacity-40 mb-3">Contents</div>
-                      <h2 className="text-3xl font-bold tracking-tight mb-2">목차</h2>
-                      <div className="text-sm opacity-60">Chapters & Sections</div>
-                    </div>
-                    <div className="space-y-6">
-                      {buildTocModel().map((ch: any) => (
-                        <div key={ch.chapter_number} className="space-y-2">
-                          <div className="flex items-baseline justify-between gap-4">
-                            <div className="font-bold text-lg">
-                              CH.{ch.chapter_number} <span className="font-normal opacity-90">{ch.title}</span>
+                    <div className={`mb-16 print:break-after-page ${theme.border}`}>
+                      <div className="text-center mb-8">
+                        <div className="text-[11px] tracking-[0.35em] uppercase opacity-40 mb-3">Contents</div>
+                        <h2 className="text-3xl font-bold tracking-tight mb-2">목차</h2>
+                        <div className="text-sm opacity-60">Chapters & Sections</div>
+                      </div>
+                      <div className="space-y-6">
+                        {buildTocModel().map((ch: any) => (
+                          <div key={ch.chapter_number} className="space-y-2">
+                            <div className="flex items-baseline justify-between gap-4">
+                              <div className="font-bold text-lg">
+                                CH.{ch.chapter_number} <span className="font-normal opacity-90">{ch.title}</span>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 gap-y-1">
+                              {ch.subsections.map((sub: any) => {
+                                const key = `${ch.chapter_number}_${sub.sub_number}`;
+                                return (
+                                  <a
+                                    key={sub.sub_number}
+                                    href={`#section-${key}`}
+                                    onClick={(e) => { e.preventDefault(); jumpToSection(ch.chapter_number, sub.sub_number); }}
+                                    className="text-sm opacity-80 hover:opacity-100 underline-offset-4 hover:underline"
+                                  >
+                                    {ch.chapter_number}-{sub.sub_number}. {sub.title}
+                                  </a>
+                                );
+                              })}
                             </div>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
-                            {ch.subsections.map((sub: any) => {
-                              const key = `${ch.chapter_number}_${sub.sub_number}`;
-                              return (
-                                <a
-                                  key={sub.sub_number}
-                                  href={`#section-${key}`}
-                                  onClick={(e) => { e.preventDefault(); jumpToSection(ch.chapter_number, sub.sub_number); }}
-                                  className="text-sm opacity-80 hover:opacity-100 underline-offset-4 hover:underline"
-                                >
-                                  {ch.chapter_number}-{sub.sub_number}. {sub.title}
-                                </a>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {bookStructure.chapters.map((ch) => (
-                    <div key={ch.chapter_number} className="chapter-block print:break-before-page">
-                      <div className="mb-16 mt-8 text-center">
-                        <span className={`inline-block text-xs font-bold tracking-[0.3em] uppercase opacity-40 border-b pb-2 mb-4 ${theme.border}`}>Chapter {ch.chapter_number}</span>
-                        <h2 className="text-4xl font-bold tracking-tight">{ch.title}</h2>
+                        ))}
                       </div>
-
-                      {ch.subsections.map((sub) => {
-                        const key = `${ch.chapter_number}_${sub.sub_number}`;
-                        const content = subsectionContents[key];
-                        const isEditingThis = editingSection?.key === key;
-
-                        return (
-                          <div
-                            key={sub.sub_number}
-                            id={`section-${key}`}
-                            className="mb-12 subsection-block relative group scroll-mt-24"
-                          >
-                            <h3 className="text-xl font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
-                              <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
-                            </h3>
-
-                            {/* AI Edit Toolbar - Always visible with low opacity, full on hover */}
-                            {content && !isEditingThis && (
-                              <div className={`absolute right-0 top-0 opacity-50 hover:opacity-100 transition-opacity shadow-md rounded-lg border p-1 flex gap-1 print:hidden ${theme.previewBg} ${theme.border} bg-opacity-90 backdrop-blur`}>
-                                <button onClick={() => handleAIEdit(key, "내용을 더 풍부하게 확장해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="확장">
-                                  <Wand2 size={14} />
-                                </button>
-                                <button onClick={() => handleAIEdit(key, "내용을 간결하게 요약해줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="요약">
-                                  <FileText size={14} />
-                                </button>
-                                <button onClick={() => handleAIEdit(key, "문법과 문체를 매끄럽게 다듬어줘")} className="p-2 hover:bg-black/5 rounded text-xs flex items-center gap-1" title="윤문">
-                                  <Sparkles size={14} />
-                                </button>
-                              </div>
-                            )}
-
-                            {isEditingThis ? (
-                              <div className="p-8 border-2 border-indigo-100 rounded-lg bg-indigo-50/30 flex items-center justify-center gap-3 text-indigo-600 animate-pulse">
-                                <Wand2 className="animate-bounce" /> AI가 문장을 다듬고 있습니다...
-                              </div>
-                            ) : content ? (
-                              <div className="prose prose-lg max-w-none prose-p:leading-loose">
-                                {renderMarkdown(content)}
-                              </div>
-                            ) : (
-                              <div className="p-6 border border-dashed rounded text-center opacity-40 text-sm py-12 print:hidden">
-                                집필 대기 중... ({sub.title})
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 print:hidden">
-                  <BookOpen size={48} />
-                  <p>왼쪽 패널에서 기획을 시작하면<br />여기에 원고가 실시간으로 표시됩니다.</p>
-                </div>
-              )}
 
-              {/* Fact Check Modal */}
+                    {bookStructure.chapters.map((ch) => (
+                      <div key={ch.chapter_number} className="chapter-block print:break-before-page">
+                        <div className="mb-16 mt-8 text-center">
+                          <span className={`inline-block text-xs font-bold tracking-[0.3em] uppercase opacity-40 border-b pb-2 mb-4 ${theme.border}`}>Chapter {ch.chapter_number}</span>
+                          <h2 className="text-4xl font-bold tracking-tight">{ch.title}</h2>
+                        </div>
+
+                        {ch.subsections.map((sub) => {
+                          const key = `${ch.chapter_number}_${sub.sub_number}`;
+                          const content = subsectionContents[key];
+                          const isEditingThis = editingSection?.key === key;
+
+                          return (
+                            <div
+                              key={sub.sub_number}
+                              id={`section-${key}`}
+                              className="mb-12 subsection-block relative group scroll-mt-24"
+                            >
+                              <h3 className="text-xl font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
+                                <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
+                              </h3>
+
+                              {content && !isEditingThis && (
+                                <div className={`absolute right-0 top-0 opacity-50 hover:opacity-100 transition-opacity shadow-md rounded-lg border p-1 flex gap-1 print:hidden ${theme.previewBg} ${theme.border} bg-opacity-90 backdrop-blur`}>
+                                  <button onClick={() => handleAIEdit(key, "내용을 더 풍부하게 확장해줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="확장"><Wand2 size={14} /></button>
+                                  <button onClick={() => handleAIEdit(key, "내용을 간결하게 요약해줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="요약"><FileText size={14} /></button>
+                                  <button onClick={() => handleAIEdit(key, "문법과 문체를 매끄럽게 다듬어줘")} className="p-2 hover:bg-black/5 rounded text-xs" title="윤문"><Sparkles size={14} /></button>
+                                </div>
+                              )}
+
+                              {isEditingThis ? (
+                                <div className="p-8 border-2 border-indigo-100 rounded-lg bg-indigo-50/30 flex items-center justify-center gap-3 text-indigo-600 animate-pulse">
+                                  <Wand2 className="animate-bounce" /> AI가 문장을 다듬고 있습니다...
+                                </div>
+                              ) : content ? (
+                                <div className="prose prose-lg max-w-none prose-p:leading-loose">
+                                  {renderMarkdown(content)}
+                                </div>
+                              ) : (
+                                <div className="p-6 border border-dashed rounded text-center opacity-40 text-sm py-12 print:hidden">
+                                  집필 대기 중... ({sub.title})
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 print:hidden">
+                    <BookOpen size={48} />
+                    <p>왼쪽 패널에서 기획을 시작하면<br />여기에 원고가 실시간으로 표시됩니다.</p>
+                  </div>
+                )}
+            </div>
+
+            {/* Fact Check Modal */}
               {isFactCheckModalOpen && (
                 <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 print:hidden">
                   <div className={`w-full max-w-4xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
@@ -3596,7 +3691,7 @@ ${JSON.stringify({ claims }, null, 2)}
                     {personaChatMessages.map((m, i) => (
                       <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[80%] p-2 rounded-lg text-sm ${m.role === 'user' ? 'bg-indigo-500 text-white rounded-br-none' : 'bg-white border text-slate-800 rounded-bl-none shadow-sm'}`}>
-                          {m.content}
+                          {m.role === 'user' ? m.content : (renderMarkdown(m.content) || m.content)}
                         </div>
                       </div>
                     ))}
@@ -3622,7 +3717,6 @@ ${JSON.stringify({ claims }, null, 2)}
                   </form>
                 </div>
               )}
-            </div>
           </div>
         )}
       </main>
