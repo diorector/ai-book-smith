@@ -32,6 +32,11 @@ React 코드를 Next.js App Router 구조에 맞게 성공적으로 리팩토링
 
 ```bash
 GEMINI_API_KEY=your_actual_api_key_here
+
+# Optional: Web-grounded fact checking (recommended)
+# First: Tavily (STTCPW), later: migrate to SerpAPI by switching SEARCH_PROVIDER and adding SERPAPI_API_KEY
+SEARCH_PROVIDER=tavily
+TAVILY_API_KEY=your_tavily_api_key_here
 ```
 
 > **API 키 발급**: https://aistudio.google.com/app/apikey

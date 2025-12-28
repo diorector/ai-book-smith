@@ -176,13 +176,28 @@ const SYSTEM_PROMPTS = {
   ${prevContext ? `(직전 섹션 마지막 문단): ...${prevContext}` : '(챕터의 시작입니다)'}
 
   [집필 필수 규칙 - 매우 중요]
-  1. **목표 분량: 공백 포함 2,000자 이상.** 절대 요약하지 말고, 대화문, 묘사, 사례 연구, 철학적 사색을 충분히 섞어서 글을 '늘려' 쓰세요.
+  1. **목표 분량: 공백 포함 2,000자 이상.** 하지만 같은 말을 반복해서 늘리지 말고, 반드시 '새 정보/새 사례/새 관점'으로 분량을 채우세요.
+     - 분량이 부족하면: (a) 구체 사례 1개 추가 (b) 체크리스트/프레임워크 1개 추가 (c) 흔한 오해/반론과 반박 1개 추가 중에서 선택하세요.
+     - 금지: 앞 문단을 다른 말로 다시 말하기, 결론을 여러 번 되풀이하기, “결국/요컨대/다시 말해”의 남발.
   2. **챕터 내 일관성:** 이 챕터의 다른 섹션들(${chapter.subsections.filter(s => s.sub_number !== subsection.sub_number).map(s => s.title).join(', ')})과 논리적으로 이어지도록 작성하세요.
   3. **사족(Meta-text) 절대 금지:** 글의 시작이나 끝에 "[2000자 충족함]", "(현재 분량: ...)", "다음 챕터에서는...", "이상으로..." 같은 시스템 메시지나 작가의 말을 절대 포함하지 마세요. **오직 순수한 원고 본문만 출력하세요.**
   4. **LaTeX 수식 금지:** $$...$$나 \\text{} 같은 수식 코드를 절대 사용하지 마세요. 모든 수식이나 도식은 '글(텍스트)'로 풀어서 설명하세요.
-  5. **코드 블록 금지:** 프로그래밍 코드가 아니라면 \`\`\` 사용을 자제하세요.
+  5. **코드 블록 금지:** 원고 본문에는 \`\`\` 사용 금지. 단, 맨 마지막에 FACTS_JSON 블록 1개만 예외로 허용됩니다.
   6. Markdown 형식을 사용하되, 최상위 제목(#)은 쓰지 마세요. 소제목은 ###를 사용하세요.
   7. **용어 통일:** 핵심 키워드는 반드시 원래 용어를 그대로 사용하고, 동의어나 다른 표현으로 바꾸지 마세요.
+
+  [팩트체크 출력 - 반드시 포함]
+  - 원고 본문을 모두 출력한 뒤, 맨 마지막에 아래 코드 펜스를 **그대로** 붙이세요.
+  - claims에는 “검색/검증이 필요한 단정적 사실 주장”만 담으세요. (숫자/연도/인용/연구결과/법·제도/특정 인물·기관·사건 등)
+  - 확신이 없으면 confidence를 낮추고, 본문 표현도 단정 대신 완화(가능하다/경향이 있다)하세요.
+  
+  \`\`\`FACTS_JSON
+  {
+    "claims": [
+      { "claim": "검증이 필요한 주장(원문 그대로)", "confidence": "low|medium|high", "suggested_query": "검색어(한 줄)", "note": "왜 검증이 필요한지/어떤 부분이 불확실한지" }
+    ]
+  }
+  \`\`\`
   `,
 
   editor: (originalText: string, instruction: string, tonePrompt: string) => `
@@ -289,8 +304,12 @@ export default function BookSmithAI() {
 
   // Writing State
   const [subsectionContents, setSubsectionContents] = useState({});
+  const [factClaimsBySection, setFactClaimsBySection] = useState<Record<string, any[]>>({});
   const [progress, setProgress] = useState({ total: 0, current: 0, status: 'idle' });
   const [isTestMode, setIsTestMode] = useState(true); // 테스트 모드 기본값
+  const [isAutoFactChecking, setIsAutoFactChecking] = useState(false);
+  const [autoFactCheckProgress, setAutoFactCheckProgress] = useState({ current: 0, total: 0, status: '' });
+  const [factCheckMode, setFactCheckMode] = useState<'off' | 'fast' | 'web'>('fast'); // OFF | 웹 없이(빠름) | 웹 검색+출처(정확, 느림/유료화 대상)
   const [writingFeedback, setWritingFeedback] = useState('');
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [isFeedbackChatOpen, setIsFeedbackChatOpen] = useState(false);
@@ -310,8 +329,194 @@ export default function BookSmithAI() {
   const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
   const [editingSection, setEditingSection] = useState(null);
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [isFactCheckModalOpen, setIsFactCheckModalOpen] = useState(false);
+
+  // Detailed TOC (after writing)
+  const [showDetailedToc, setShowDetailedToc] = useState(false);
+  const [tocExpandedChapters, setTocExpandedChapters] = useState<Record<number, boolean>>({});
+  const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
+  const [syncedPanelHeightPx, setSyncedPanelHeightPx] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previewScrollRef = useRef<HTMLDivElement | null>(null);
+  const leftProgressScrollRef = useRef<HTMLDivElement | null>(null);
+  const leftPanelOuterRef = useRef<HTMLDivElement | null>(null);
+  const rightPanelOuterRef = useRef<HTMLDivElement | null>(null);
+
+  const canShowDetailedToc = !!bookStructure && (progress.status === 'done' || progress.status === 'test-complete' || step === 'done');
+
+  const toggleTocChapter = (chapterIdx: number) => {
+    setTocExpandedChapters(prev => ({ ...prev, [chapterIdx]: !prev[chapterIdx] }));
+  };
+
+  const toggleDetailedToc = () => {
+    setShowDetailedToc(prev => {
+      const next = !prev;
+      if (next && bookStructure && Object.keys(tocExpandedChapters || {}).length === 0) {
+        const initial: Record<number, boolean> = {};
+        bookStructure.chapters.forEach((_: any, i: number) => (initial[i] = i === 0));
+        setTocExpandedChapters(initial);
+      }
+      return next;
+    });
+  };
+
+  const jumpToSection = (chapterNumber: number, subNumber: number) => {
+    const key = `${chapterNumber}_${subNumber}`;
+    const el = document.getElementById(`section-${key}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const extractFactsJson = (text: string): { manuscript: string; claims: any[] } => {
+    if (!text) return { manuscript: "", claims: [] };
+    const re = /```FACTS_JSON\s*([\s\S]*?)\s*```/m;
+    const m = text.match(re);
+    if (!m) return { manuscript: text.trim(), claims: [] };
+    const jsonStr = m[1];
+    let claims: any[] = [];
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed?.claims)) claims = parsed.claims;
+    } catch {
+      claims = [];
+    }
+    const manuscript = text.replace(re, "").trim();
+    return { manuscript, claims };
+  };
+
+  const openWebSearch = (q: string) => {
+    const query = (q || "").trim();
+    if (!query) return;
+    try {
+      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank', 'noopener,noreferrer');
+    } catch {}
+  };
+
+  const factCheckInstructionForSection = (key: string) => {
+    const claims = (factClaimsBySection[key] || []).slice(0, 30);
+    return `아래 원고를 '팩트체크 관점'에서 보수적으로 수정하세요.
+
+[목표]
+- 검증이 필요한 단정(숫자/연도/인용/연구결과/법·제도/특정 인물·기관·사건)은 근거 없이 단정하지 말고, 가능하면 일반화/완화 표현으로 바꾸세요.
+- 사실이 불확실하면: 단정 → (경향/가능성/일반적인 사례)로 전환하거나, 문장 자체를 제거하고 논지(교훈/원리)는 남기세요.
+- 동시에 중언부언(같은 말 반복)을 제거하세요. 다만 분량은 유지하되 “새 사례/체크리스트/반론-반박”으로 채우세요.
+- 출력은 수정된 본문만. (사족 금지)
+
+[검증 필요 주장 목록(JSON)]
+${JSON.stringify({ claims }, null, 2)}
+`;
+  };
+
+  // --- Scroll sync: Right preview -> Left progress (follow current chapter) ---
+  useEffect(() => {
+    if (!bookStructure) return;
+    const scroller = previewScrollRef.current;
+    if (!scroller) return;
+
+    let raf = 0;
+    const rebuildIndex = () => {
+      const ids: Array<{ key: string; top: number }> = [];
+      try {
+        bookStructure.chapters.forEach((ch: any) => {
+          (ch.subsections || []).forEach((sub: any) => {
+            const key = `${ch.chapter_number}_${sub.sub_number}`;
+            const el = document.getElementById(`section-${key}`);
+            if (!el) return;
+            ids.push({ key, top: (el as any).offsetTop || 0 });
+          });
+        });
+      } catch {}
+      ids.sort((a, b) => a.top - b.top);
+      return ids;
+    };
+
+    let index = rebuildIndex();
+    const pickActiveKey = () => {
+      const y = scroller.scrollTop + 120; // 헤더/여백 보정
+      // 최신 top <= y인 항목
+      let lo = 0, hi = index.length - 1, ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (index[mid].top <= y) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      const key = ans >= 0 ? index[ans].key : (index[0]?.key || null);
+      if (key) setActiveSectionKey(prev => (prev === key ? prev : key));
+    };
+
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        pickActiveKey();
+      });
+    };
+
+    // 초기/리사이즈 시 재계산
+    const onResize = () => { index = rebuildIndex(); pickActiveKey(); };
+    scroller.addEventListener('scroll', onScroll, { passive: true } as any);
+    window.addEventListener('resize', onResize);
+    onResize();
+
+    return () => {
+      try { scroller.removeEventListener('scroll', onScroll as any); } catch {}
+      try { window.removeEventListener('resize', onResize as any); } catch {}
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [bookStructure, step]);
+
+  useEffect(() => {
+    if (!activeSectionKey) return;
+    const [chStr] = activeSectionKey.split('_');
+    const chNum = parseInt(chStr, 10);
+    if (!Number.isFinite(chNum)) return;
+    const el = document.getElementById(`left-ch-${chNum}`);
+    if (el) {
+      // 왼쪽 진행 리스트가 현재 챕터를 계속 보여주도록 따라오기
+      try { el.scrollIntoView({ block: 'nearest' }); } catch {}
+    }
+  }, [activeSectionKey]);
+
+  // Sync right panel height constraint to left panel height (right is constrained, and matches left)
+  useEffect(() => {
+    const left = leftPanelOuterRef.current;
+    if (!left) return;
+
+    const measure = () => {
+      const h = Math.round(left.getBoundingClientRect().height || 0);
+      setSyncedPanelHeightPx(h > 0 ? h : null);
+    };
+
+    measure();
+    let ro: any = null;
+    try {
+      ro = new (window as any).ResizeObserver(() => measure());
+      ro.observe(left);
+    } catch {
+      // ignore
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      try { ro?.disconnect?.(); } catch {}
+    };
+  }, [step, showDetailedToc]);
+
+  const handleFactCheckRewrite = async (key: string) => {
+    if (!subsectionContents[key]) return;
+    setEditingSection({ key, loading: true });
+    try {
+      const originalText = subsectionContents[key];
+      const newContent = await callGemini(
+        originalText,
+        factCheckInstructionForSection(key)
+      );
+      setSubsectionContents(prev => ({ ...prev, [key]: newContent }));
+    } catch (e: any) {
+      alert("팩트체크 윤문 실패: " + (e?.message || String(e)));
+    } finally {
+      setEditingSection(null);
+    }
+  };
 
   // Project Management
   const PROJECTS_KEY = 'ai-book-smith-projects';
@@ -417,6 +622,8 @@ export default function BookSmithAI() {
         if (parsed.toneSettings) setToneSettings(parsed.toneSettings);
         if (parsed.bookStructure) setBookStructure(parsed.bookStructure);
         if (parsed.subsectionContents) setSubsectionContents(parsed.subsectionContents);
+        if (parsed.factClaimsBySection) setFactClaimsBySection(parsed.factClaimsBySection);
+        if (parsed.factCheckMode) setFactCheckMode(parsed.factCheckMode);
         if (parsed.progress) {
           // 새로고침/재접속 시: 진행 중(writing)으로 저장된 상태는 실제로는 작업이 중단된 상태이므로 'stopped'로 전환
           if (parsed.step === 'writing' && parsed.progress?.status === 'writing') {
@@ -436,6 +643,10 @@ export default function BookSmithAI() {
         if (parsed.writingFeedback) setWritingFeedback(parsed.writingFeedback);
         if (parsed.showFeedbackInput !== undefined) setShowFeedbackInput(parsed.showFeedbackInput);
         if (parsed.feedbackChatMessages) setFeedbackChatMessages(parsed.feedbackChatMessages);
+        if (typeof parsed.showDetailedToc === 'boolean') setShowDetailedToc(parsed.showDetailedToc);
+        if (parsed.tocExpandedChapters && typeof parsed.tocExpandedChapters === 'object') {
+          setTocExpandedChapters(parsed.tocExpandedChapters);
+        }
       } catch (e) {
         console.error("Failed to load project state (IndexedDB):", e);
       }
@@ -457,6 +668,8 @@ export default function BookSmithAI() {
       toneSettings,
       bookStructure,
       subsectionContents,
+      factClaimsBySection,
+      factCheckMode,
       progress,
       coverImage,
       coverConcepts,
@@ -467,6 +680,8 @@ export default function BookSmithAI() {
       writingFeedback,
       showFeedbackInput,
       feedbackChatMessages,
+      showDetailedToc,
+      tocExpandedChapters,
       ...overrides,
     });
 
@@ -488,7 +703,7 @@ export default function BookSmithAI() {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
     localStorage.setItem('ai-book-smith-last-project', currentProjectId);
     return () => clearTimeout(t);
-  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, currentProjectId, bookStructure?.title, isTestMode, writingFeedback, showFeedbackInput, feedbackChatMessages]);
+  }, [step, messages, readyForOutline, toneSettings, bookStructure, subsectionContents, factClaimsBySection, factCheckMode, progress, coverImage, coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, currentProjectId, bookStructure?.title, isTestMode, writingFeedback, showFeedbackInput, feedbackChatMessages, showDetailedToc, tocExpandedChapters]);
 
   // Create new project
   const createNewProject = () => {
@@ -511,12 +726,17 @@ export default function BookSmithAI() {
     setReadyForOutline(false);
     setBookStructure(null);
     setSubsectionContents({});
+    setFactClaimsBySection({});
     setProgress({ total: 0, current: 0, status: 'idle' });
     setCoverImage(null);
     setCoverConcepts(null);
     setCoverPromptUsed('');
     setShowProjectSelector(false);
     setIsTestMode(true);
+    setIsFactCheckModalOpen(false);
+    setIsAutoFactChecking(false);
+    setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
+    setFactCheckMode('fast');
     setWritingFeedback('');
     setShowFeedbackInput(false);
     setIsFeedbackChatOpen(false);
@@ -650,6 +870,99 @@ export default function BookSmithAI() {
 
     const data = await response.json();
     return data.text;
+  };
+
+  // --- Writing helpers (concurrent generation) ---
+  const WRITE_CONCURRENCY = 6; // 동시 생성 개수 (너무 높이면 API/브라우저가 불안정해질 수 있음)
+  const TEST_SECTIONS_MAX = 3; // 테스트 집필은 2~3개 "섹션"만 생성
+  const AUTO_FACTCHECK_ON_COMPLETE = true; // 자동 2차 패스 자체는 유지(모드는 유저 선택)
+  const FACTCHECK_CONCURRENCY = 3;
+
+  const isAbortError = (e: any) => e?.name === 'AbortError';
+
+  const runConcurrent = async <T,>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T) => Promise<void>,
+    signal?: AbortSignal
+  ) => {
+    const queue = items.slice();
+    const n = Math.max(1, Math.min(concurrency, queue.length || 1));
+    const runners = Array.from({ length: n }, async () => {
+      while (queue.length > 0) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        const item = queue.shift()!;
+        await worker(item);
+      }
+    });
+    await Promise.all(runners);
+  };
+
+  const autoFactCheckPass = async (signal?: AbortSignal) => {
+    if (!AUTO_FACTCHECK_ON_COMPLETE) return;
+    if (factCheckMode === 'off') return;
+    // claims가 있는 섹션만 대상으로 자동 팩트체크
+    // 1순위: 웹 근거 기반 (/api/fact-check-web)
+    // 실패 시: 로컬 보수적 안정화(단정/수치/인용 완화 or 제거) fallback
+    const keys = Object.keys(factClaimsBySection || {}).filter((k) => (factClaimsBySection[k] || []).length > 0);
+    if (keys.length === 0) return;
+
+    setIsAutoFactChecking(true);
+    setAutoFactCheckProgress({
+      current: 0,
+      total: keys.length,
+      status: factCheckMode === 'web' ? '팩트체크(웹 검색+출처) 중...' : '팩트체크(빠름: 웹 없이) 중...'
+    });
+    try {
+      await runConcurrent(
+        keys,
+        FACTCHECK_CONCURRENCY,
+        async (key) => {
+          if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          const originalText = (subsectionContents as any)[key];
+          if (!originalText) {
+            setAutoFactCheckProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            return;
+          }
+          try {
+            // Try web-grounded fact check first
+            let rewritten: string | null = null;
+            if (factCheckMode === 'web') {
+              try {
+                const res = await fetch('/api/fact-check-web', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    manuscript: originalText,
+                    claims: (factClaimsBySection as any)[key] || []
+                  }),
+                  signal,
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data?.rewritten) rewritten = data.rewritten;
+                }
+              } catch {
+                // ignore and fallback
+              }
+            }
+
+            // Fallback: conservative stabilization without web evidence
+            if (!rewritten) {
+              rewritten = await callGemini(originalText, factCheckInstructionForSection(key), signal);
+            }
+
+            setSubsectionContents(prev => ({ ...prev, [key]: rewritten }));
+          } finally {
+            setAutoFactCheckProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          }
+        },
+        signal
+      );
+      setAutoFactCheckProgress(prev => ({ ...prev, status: '팩트체크 완료' }));
+    } finally {
+      setIsAutoFactChecking(false);
+    }
   };
 
   const callGeminiStream = async (prompt: string | any[], systemInstruction = "", onUpdate: (text: string) => void, generationConfig?: any, signal?: AbortSignal) => {
@@ -1692,55 +2005,72 @@ export default function BookSmithAI() {
       `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`
     , "", writingSignal);
     
-    // 테스트 모드: 서문 + 처음 2개 챕터만 생성
-    let chaptersToWrite: any[] = [];
-    if (testMode) {
-      // 서문 찾기 (제목에 "서문" 또는 "Prologue"가 포함된 경우)
-      const prologue = bookStructure.chapters.find(ch => 
-        ch.title.includes('서문') || ch.title.includes('Prologue') || ch.title.includes('서론')
-      );
-      // 일반 챕터들 (서문 제외, chapter_number로 정렬)
-      const regularChapters = bookStructure.chapters
-        .filter(ch => !(ch.title.includes('서문') || ch.title.includes('Prologue') || ch.title.includes('서론')))
-        .sort((a, b) => a.chapter_number - b.chapter_number);
-      
-      // 서문이 있으면 서문 + 처음 2개 챕터, 없으면 처음 2개 챕터만
-      chaptersToWrite = prologue 
-        ? [prologue, ...regularChapters.slice(0, 2)]
-        : regularChapters.slice(0, 2);
-      
-      console.log('테스트 모드 - 생성할 챕터:', chaptersToWrite.map(ch => `${ch.chapter_number}. ${ch.title}`));
-      console.log('전체 챕터 수:', bookStructure.chapters.length);
-    } else {
-      // 전체 모드: 모든 챕터
-      chaptersToWrite = bookStructure.chapters;
-    }
-    
-    let totalTasks = 0;
-    chaptersToWrite.forEach(ch => totalTasks += ch.subsections.length);
-    setProgress({ total: totalTasks, current: 0, status: 'writing' });
-    
-    let overallContext = "";
-    // 테스트 모드에서는 선택된 챕터만 순차 처리
-    try {
-      for (const chapter of chaptersToWrite) {
-        let prevContext = "";
-        for (const sub of chapter.subsections) {
+    // 테스트 모드: "챕터 전체"가 아니라 2~3개 섹션만 빠르게 샘플 생성
+    // 전체 모드: 모든 섹션을 병렬 배치로 생성(동시성 제한)
+    const buildTasks = () => {
+      const tasks: Array<{ chapter: any; sub: any; key: string; prompt: string }> = [];
+      const chapters = bookStructure.chapters || [];
+
+      const isPrologueLike = (t: string) => (t || '').includes('서문') || (t || '').includes('Prologue') || (t || '').includes('서론');
+      const prologue = chapters.find((ch: any) => isPrologueLike(ch.title));
+      const regularChapters = chapters
+        .filter((ch: any) => !isPrologueLike(ch.title))
+        .sort((a: any, b: any) => a.chapter_number - b.chapter_number);
+
+      if (testMode) {
+        const picks: Array<{ chapter: any; sub: any }> = [];
+        // 1) 서문 첫 섹션(있으면)
+        if (prologue?.subsections?.length) picks.push({ chapter: prologue, sub: prologue.subsections[0] });
+        // 2) 첫/둘째 챕터의 첫 섹션
+        if (regularChapters[0]?.subsections?.length) picks.push({ chapter: regularChapters[0], sub: regularChapters[0].subsections[0] });
+        if (regularChapters[1]?.subsections?.length) picks.push({ chapter: regularChapters[1], sub: regularChapters[1].subsections[0] });
+
+        for (const { chapter, sub } of picks.slice(0, TEST_SECTIONS_MAX)) {
           const key = `${chapter.chapter_number}_${sub.sub_number}`;
+          const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, "", tonePrompt, bookSummary);
+          tasks.push({ chapter, sub, key, prompt });
+        }
+        console.log('테스트 모드 - 생성할 섹션:', tasks.map(t => t.key));
+        return tasks;
+      }
+
+      // 전체 모드: 모든 섹션
+      for (const chapter of chapters) {
+        for (const sub of (chapter.subsections || [])) {
+          const key = `${chapter.chapter_number}_${sub.sub_number}`;
+          const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, "", tonePrompt, bookSummary);
+          tasks.push({ chapter, sub, key, prompt });
+        }
+      }
+      return tasks;
+    };
+
+    const tasks = buildTasks();
+    setProgress({ total: tasks.length, current: 0, status: 'writing' });
+
+    try {
+      await runConcurrent(
+        tasks,
+        WRITE_CONCURRENCY,
+        async (t) => {
           try {
-            const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
-            const content = await callGemini(prompt, "", writingSignal);
-            setSubsectionContents(prev => ({ ...prev, [key]: content }));
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-            prevContext = content.slice(-1000);
+            const content = await callGemini(t.prompt, "", writingSignal);
+            const { manuscript, claims } = extractFactsJson(content);
+            setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+            if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
           } catch (error: any) {
-            if (error?.name === 'AbortError') throw error;
-            setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" }));
+            if (isAbortError(error)) throw error;
+            setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
+          } finally {
             setProgress(prev => ({ ...prev, current: prev.current + 1 }));
           }
-        }
-        overallContext += `\n\n챕터 ${chapter.chapter_number} 요약: ${chapter.subsections.map(s => s.title).join(', ')}`;
-      }
+        },
+        writingSignal
+      );
+
+      // 유저 개입 없이 자동 2차 패스(보수적 사실 안정화)
+      // 주의: 웹검색이 없으므로 "검증"이 아니라 "단정/수치/인용 환각 제거/완화"에 초점을 둡니다.
+      await autoFactCheckPass(writingSignal);
 
       if (testMode) {
         setProgress(prev => ({ ...prev, status: 'test-complete' }));
@@ -1750,7 +2080,7 @@ export default function BookSmithAI() {
         setStep('done');
       }
     } catch (e: any) {
-      if (e?.name === 'AbortError') {
+      if (isAbortError(e)) {
         setProgress(prev => ({ ...prev, status: 'stopped' }));
       } else {
         console.error("집필 실패:", e);
@@ -1768,8 +2098,12 @@ export default function BookSmithAI() {
       writingAbortRef.current = null;
     }
     setSubsectionContents({});
+    setFactClaimsBySection({});
     setProgress({ total: 0, current: 0, status: 'idle' });
     setIsTestMode(true);
+    setIsAutoFactChecking(false);
+    setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
+    setFactCheckMode('fast');
     setWritingFeedback('');
     setShowFeedbackInput(false);
     setIsFeedbackChatOpen(false);
@@ -1804,32 +2138,42 @@ export default function BookSmithAI() {
     setProgress({ total: totalAll, current: alreadyCount, status: 'writing' });
 
     try {
+      const tasks: Array<{ chapter: any; sub: any; key: string; prompt: string }> = [];
       for (const chapter of bookStructure.chapters) {
-        let prevContext = "";
-        for (const sub of chapter.subsections) {
+        for (const sub of (chapter.subsections || [])) {
           const key = `${chapter.chapter_number}_${sub.sub_number}`;
           const existing = (subsectionContents as any)[key];
-          if (isGoodContent(existing)) {
-            prevContext = existing.slice(-1000);
-            continue;
-          }
-          try {
-            const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
-            const content = await callGemini(prompt, "", writingSignal);
-            setSubsectionContents(prev => ({ ...prev, [key]: content }));
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-            prevContext = content.slice(-1000);
-          } catch (error: any) {
-            if (error?.name === 'AbortError') throw error;
-            setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" }));
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          }
+          if (isGoodContent(existing)) continue;
+          const prompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, "", tonePrompt, bookSummary);
+          tasks.push({ chapter, sub, key, prompt });
         }
       }
+
+      await runConcurrent(
+        tasks,
+        WRITE_CONCURRENCY,
+        async (t) => {
+          try {
+            const content = await callGemini(t.prompt, "", writingSignal);
+            const { manuscript, claims } = extractFactsJson(content);
+            setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+            if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
+          } catch (error: any) {
+            if (isAbortError(error)) throw error;
+            setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
+          } finally {
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          }
+        },
+        writingSignal
+      );
+
+      await autoFactCheckPass(writingSignal);
+
       setProgress(prev => ({ ...prev, status: 'done' }));
       setStep('done');
     } catch (e: any) {
-      if (e?.name === 'AbortError') {
+      if (isAbortError(e)) {
         setProgress(prev => ({ ...prev, status: 'stopped' }));
       } else {
         console.error("이어쓰기 실패:", e);
@@ -1875,22 +2219,36 @@ export default function BookSmithAI() {
       overallContext += `\n\n챕터 ${ch.chapter_number} 요약: ${ch.subsections.map(s => s.title).join(', ')}`;
     });
     
+    const tasks: Array<{ key: string; prompt: string }> = [];
     for (const chapter of remainingChapters) {
-      let prevContext = "";
-      for (const sub of chapter.subsections) {
+      for (const sub of (chapter.subsections || [])) {
         const key = `${chapter.chapter_number}_${sub.sub_number}`;
-        try {
-          // 피드백을 프롬프트에 추가
-          const basePrompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, prevContext, tonePrompt, bookSummary);
-          const promptWithFeedback = `${basePrompt}\n\n[사용자 피드백]\n${writingFeedback}\n\n위 피드백을 반영하여 집필하세요.`;
-          const content = await callGemini(promptWithFeedback);
-          setSubsectionContents(prev => ({ ...prev, [key]: content }));
-          setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          prevContext = content.slice(-1000);
-        } catch (error) { setSubsectionContents(prev => ({ ...prev, [key]: "[Error generating this section]" })); }
+        const basePrompt = SYSTEM_PROMPTS.writer(bookStructure, chapter, sub, "", tonePrompt, bookSummary);
+        const promptWithFeedback = `${basePrompt}\n\n[사용자 피드백]\n${writingFeedback}\n\n위 피드백을 반영하여 집필하세요.`;
+        tasks.push({ key, prompt: promptWithFeedback });
       }
       overallContext += `\n\n챕터 ${chapter.chapter_number} 요약: ${chapter.subsections.map(s => s.title).join(', ')}`;
     }
+
+    await runConcurrent(
+      tasks,
+      WRITE_CONCURRENCY,
+      async (t) => {
+        try {
+          const content = await callGemini(t.prompt);
+          const { manuscript, claims } = extractFactsJson(content);
+          setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+          if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
+        } catch (error: any) {
+          if (isAbortError(error)) throw error;
+          setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
+        } finally {
+          setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+        }
+      }
+    );
+
+    await autoFactCheckPass();
     
     setProgress(prev => ({ ...prev, status: 'done' }));
     setStep('done');
@@ -1925,7 +2283,9 @@ export default function BookSmithAI() {
 
 
   return (
-    <div className={`min-h-screen font-sans flex flex-col transition-colors duration-500 ${theme.bg} ${theme.text}`}>
+    <div className={`min-h-screen font-ui flex flex-col transition-colors duration-500 ${theme.text}`}>
+      {/* Keep page scroll enabled, but ensure the viewport background always matches the selected theme */}
+      <div className={`fixed inset-0 -z-50 ${theme.bg}`} />
       {/* Print Styles Global */}
       <style>{`@media print { body * { visibility: hidden; } #printable-area, #printable-area * { visibility: visible; } #printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 2cm; } header, .sidebar-panel { display: none !important; } @page { margin: 2cm; size: auto; } }`}</style>
 
@@ -2164,13 +2524,16 @@ export default function BookSmithAI() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
+      <main className="flex-1 p-4 pb-80 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
 
         {/* Left Panel */}
-        <div className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
+        <div
+          ref={leftPanelOuterRef}
+          className={`sidebar-panel flex flex-col h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
           ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
           : 'lg:col-span-5'
-          } ${step === 'done' ? 'hidden lg:flex' : ''}`}>
+          } ${step === 'done' ? 'hidden lg:flex' : ''}`}
+        >
           <div className={`flex justify-between p-3 rounded-lg border text-xs font-mono ${theme.panel} ${theme.border} opacity-70`}>
             <span className={step === 'interview' ? 'font-bold underline' : ''}>1.Design</span>
             <span className={step === 'outline' ? 'font-bold underline' : ''}>2.Structure</span>
@@ -2425,6 +2788,34 @@ export default function BookSmithAI() {
                 </div>
               </div>
 
+              {/* Fact-check mode selector (good for future billing gates) */}
+              <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold opacity-80">팩트체크 모드</div>
+                    <div className="text-[11px] opacity-60">
+                      OFF / 빠름(웹 없이) / 정확(웹 검색+출처)
+                    </div>
+                  </div>
+                  <select
+                    value={factCheckMode}
+                    onChange={(e) => setFactCheckMode(e.target.value as any)}
+                    className={`text-xs rounded-lg px-2 py-1 border outline-none ${theme.input} ${theme.border} ${theme.text}`}
+                    title="정확(웹 검색+출처)은 느리고 비용이 들 수 있어, 향후 유료 옵션으로 두기 좋습니다."
+                  >
+                    <option value="off">OFF</option>
+                    <option value="fast">빠름(웹 없이)</option>
+                    <option value="web">정확(웹 검색+출처)</option>
+                  </select>
+                </div>
+                {isAutoFactChecking && (
+                  <div className="mt-3 text-[11px] opacity-70 flex items-center justify-between">
+                    <span>{autoFactCheckProgress.status}</span>
+                    <span>{autoFactCheckProgress.total > 0 ? `${autoFactCheckProgress.current}/${autoFactCheckProgress.total}` : ''}</span>
+                  </div>
+                )}
+              </div>
+
               {showRecoveryBanner && (step === 'writing' || progress.status === 'stopped') && (
                 <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
                   <div className="text-sm font-bold mb-1">중단된 집필을 감지했어요</div>
@@ -2464,10 +2855,79 @@ export default function BookSmithAI() {
                   style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
                 ></div>
               </div>
-              <div className={`flex-1 overflow-y-auto space-y-2 border-t pt-4 ${theme.border}`}>
-                {bookStructure.chapters.map(ch => (
-                  <div key={ch.chapter_number} className="text-sm">
-                    <div className="font-bold opacity-60 mb-1">CH.{ch.chapter_number} {ch.title}</div>
+              {canShowDetailedToc && (
+                <div className="mb-4 relative">
+                  <div className={`rounded-lg border overflow-hidden ${theme.border} ${theme.bg}`}>
+                    <button
+                      onClick={toggleDetailedToc}
+                      className="w-full flex items-center justify-between px-3 py-2 text-sm font-bold hover:bg-black/5"
+                      title="집필 완료 후에도 세부 목차(소제목)를 다시 확인할 수 있어요."
+                    >
+                      <span className="flex items-center gap-2">
+                        {showDetailedToc ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        세부 목차 {showDetailedToc ? '숨기기' : '보기'}
+                      </span>
+                      <span className="text-[11px] opacity-60 font-normal">클릭하면 우측 원고로 이동</span>
+                    </button>
+                  </div>
+
+                  {showDetailedToc && (
+                    <div
+                      className={`absolute left-0 right-0 top-full mt-2 rounded-lg border shadow-xl z-30 ${theme.panel} ${theme.border}`}
+                    >
+                      <div className="max-h-[45vh] overflow-y-auto p-2 space-y-2">
+                        {bookStructure.chapters.map((ch: any, chIdx: number) => (
+                          <div key={ch.chapter_number} className={`rounded-lg border ${theme.border} bg-black/5 overflow-hidden`}>
+                            <button
+                              onClick={() => toggleTocChapter(chIdx)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-black/5"
+                            >
+                              {tocExpandedChapters[chIdx] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${theme.bg} ${theme.accent}`}>CH.{ch.chapter_number}</span>
+                              <span className="text-sm font-semibold truncate">{ch.title}</span>
+                            </button>
+                            {tocExpandedChapters[chIdx] && (
+                              <div className={`p-2 border-t ${theme.border} ${theme.bg}`}>
+                                <div className="space-y-1">
+                                  {ch.subsections.map((sub: any) => {
+                                    const key = `${ch.chapter_number}_${sub.sub_number}`;
+                                    const hasContent = !!subsectionContents[key];
+                                    return (
+                                      <button
+                                        key={sub.sub_number}
+                                        onClick={() => jumpToSection(ch.chapter_number, sub.sub_number)}
+                                        className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left text-xs hover:bg-black/5`}
+                                        title={sub.detail || sub.title}
+                                      >
+                                        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full ${hasContent ? 'bg-green-500' : 'bg-slate-500'}`} />
+                                        <span className="opacity-70 font-mono shrink-0">{sub.sub_number.toString().padStart(2, '0')}</span>
+                                        <span className="flex-1 leading-snug">{sub.title}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div ref={leftProgressScrollRef} className={`flex-1 overflow-y-auto space-y-2 border-t pt-4 ${theme.border}`}>
+                {bookStructure.chapters.map(ch => {
+                  const isActiveCh = activeSectionKey ? activeSectionKey.startsWith(`${ch.chapter_number}_`) : false;
+                  return (
+                  <div
+                    key={ch.chapter_number}
+                    id={`left-ch-${ch.chapter_number}`}
+                    className={`text-sm rounded-md px-2 py-1 transition-colors ${isActiveCh ? 'bg-indigo-500/10' : ''}`}
+                  >
+                    <div className={`font-bold mb-1 flex items-center justify-between ${isActiveCh ? 'opacity-100' : 'opacity-60'}`}>
+                      <span>CH.{ch.chapter_number} {ch.title}</span>
+                      {isActiveCh && <span className="text-[11px] opacity-60">읽는 중</span>}
+                    </div>
                     <div className="grid grid-cols-5 gap-1">
                       {ch.subsections.map(sub => {
                         const key = `${ch.chapter_number}_${sub.sub_number}`;
@@ -2482,7 +2942,7 @@ export default function BookSmithAI() {
                       })}
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
               {/* 피드백 입력 UI (테스트 모드 완료 후) */}
               {progress.status === 'test-complete' && showFeedbackInput && (
@@ -2600,6 +3060,13 @@ export default function BookSmithAI() {
 
               {step === 'done' && (
                 <div className="space-y-2 mt-4">
+                  <button
+                    onClick={() => setIsFactCheckModalOpen(true)}
+                    className={`w-full py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 border ${theme.border} hover:bg-black/5`}
+                    title="검증이 필요한 주장(숫자/연도/인용/연구결과 등)을 모아서 검색/수정할 수 있어요."
+                  >
+                    <Sliders size={16} /> 팩트체크 (검증 필요 항목 보기)
+                  </button>
                   <button onClick={downloadBook} className="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2">
                     <FileText size={16} /> 마크다운 (.md) 다운로드
                   </button>
@@ -2666,7 +3133,11 @@ export default function BookSmithAI() {
 
         {/* Right Panel: Preview Area */}
         {step !== 'interview' && (
-          <div className={`lg:col-span-7 rounded-xl shadow-2xl flex flex-col h-[calc(100vh-100px)] overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}>
+          <div
+            ref={rightPanelOuterRef}
+            className={`lg:col-span-7 rounded-xl shadow-2xl flex flex-col overflow-hidden border ${theme.previewBg} ${theme.border} ${theme.previewText} animate-fade-in`}
+            style={syncedPanelHeightPx ? { height: `${syncedPanelHeightPx}px`, maxHeight: `${syncedPanelHeightPx}px` } : { height: 'calc(100vh - 100px)', maxHeight: 'calc(100vh - 100px)' }}
+          >
             <div className={`p-4 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
               <div className="flex items-center gap-2">
                 <FileText size={18} className="opacity-50" />
@@ -2683,7 +3154,11 @@ export default function BookSmithAI() {
               </div>
             </div>
 
-            <div id="printable-area" className={`flex-1 overflow-y-auto p-12 print:p-0 print:overflow-visible ${theme.previewText}`}>
+            <div
+              id="printable-area"
+              ref={previewScrollRef}
+              className={`flex-1 overflow-y-auto px-16 py-14 pb-32 print:p-0 print:overflow-visible ${theme.previewText} font-book`}
+            >
               {bookStructure ? (
                 <div className="max-w-3xl mx-auto space-y-12 print:max-w-none">
                   {coverImage && (
@@ -2730,7 +3205,11 @@ export default function BookSmithAI() {
                         const isEditingThis = editingSection?.key === key;
 
                         return (
-                          <div key={sub.sub_number} className="mb-12 subsection-block relative group">
+                          <div
+                            key={sub.sub_number}
+                            id={`section-${key}`}
+                            className="mb-12 subsection-block relative group scroll-mt-24"
+                          >
                             <h3 className="text-xl font-serif font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
                               <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
                             </h3>
@@ -2773,6 +3252,90 @@ export default function BookSmithAI() {
                 <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 print:hidden">
                   <BookOpen size={48} />
                   <p>왼쪽 패널에서 기획을 시작하면<br />여기에 원고가 실시간으로 표시됩니다.</p>
+                </div>
+              )}
+
+              {/* Fact Check Modal */}
+              {isFactCheckModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 print:hidden">
+                  <div className={`w-full max-w-4xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
+                    <div className={`p-3 border-b flex items-center justify-between ${theme.border}`}>
+                      <div className="font-bold text-sm flex items-center gap-2">
+                        <Sliders size={16} className={theme.accent} /> 팩트체크(검증 필요 항목)
+                      </div>
+                      <button
+                        onClick={() => setIsFactCheckModalOpen(false)}
+                        className="p-2 rounded hover:bg-black/10"
+                        title="닫기"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                    <div className="p-4 max-h-[70vh] overflow-y-auto space-y-4">
+                      {Object.keys(factClaimsBySection || {}).length === 0 ? (
+                        <div className="text-sm opacity-70">
+                          아직 수집된 검증 항목이 없습니다. (새로 생성된 원고부터 FACTS_JSON이 누적됩니다)
+                        </div>
+                      ) : (
+                        Object.entries(factClaimsBySection)
+                          .sort(([a], [b]) => a.localeCompare(b, 'en'))
+                          .map(([key, claims]) => (
+                            <div key={key} className={`rounded-lg border ${theme.border} ${theme.bg}`}>
+                              <div className="flex items-center justify-between px-3 py-2 border-b border-black/10">
+                                <div className="text-sm font-bold">
+                                  섹션 {key} <span className="opacity-60 font-normal text-xs">({(claims as any[]).length}개)</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => jumpToSection(parseInt(key.split('_')[0]), parseInt(key.split('_')[1]))}
+                                    className={`px-2.5 py-1 rounded text-xs font-bold border ${theme.border} hover:bg-black/5`}
+                                    title="우측 원고로 이동"
+                                  >
+                                    이동
+                                  </button>
+                                  <button
+                                    onClick={() => handleFactCheckRewrite(key)}
+                                    className={`px-2.5 py-1 rounded text-xs font-bold ${theme.button}`}
+                                    title="검증이 어려운 단정 표현을 보수적으로 완화/수정합니다."
+                                  >
+                                    팩트체크 윤문
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="p-3 space-y-2">
+                                {(claims as any[]).slice(0, 50).map((c, idx) => {
+                                  const q = (c?.suggested_query || c?.claim || '').toString();
+                                  return (
+                                    <div key={idx} className={`p-3 rounded border ${theme.border} bg-black/5`}>
+                                      <div className="text-xs opacity-70 mb-1 flex items-center justify-between gap-2">
+                                        <span>confidence: <b>{c?.confidence || 'unknown'}</b></span>
+                                        <button
+                                          onClick={() => openWebSearch(q)}
+                                          className={`px-2 py-1 rounded text-[11px] font-bold border ${theme.border} hover:bg-black/5`}
+                                          title="구글 검색 열기"
+                                        >
+                                          검색
+                                        </button>
+                                      </div>
+                                      <div className="text-sm font-semibold mb-1">{c?.claim || '(claim 없음)'}</div>
+                                      {(c?.note || '').toString().trim() && (
+                                        <div className="text-xs opacity-70">{c.note}</div>
+                                      )}
+                                      {(c?.suggested_query || '').toString().trim() && (
+                                        <div className="text-[11px] opacity-60 mt-2 font-mono">query: {c.suggested_query}</div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                    <div className={`p-3 border-t ${theme.border} ${theme.bg} text-[11px] opacity-70`}>
+                      팁: 자동 웹검색 API를 붙이면 “검색→근거 수집→검증 모델”까지 완전 자동화할 수 있어요. 지금은 원클릭 검색 + 보수적 재작성(MVP)입니다.
+                    </div>
+                  </div>
                 </div>
               )}
 
