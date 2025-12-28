@@ -185,6 +185,8 @@ const SYSTEM_PROMPTS = {
   5. **코드 블록 금지:** 원고 본문에는 \`\`\` 사용 금지. 단, 맨 마지막에 FACTS_JSON 블록 1개만 예외로 허용됩니다.
   6. Markdown 형식을 사용하되, 최상위 제목(#)은 쓰지 마세요. 소제목은 ###를 사용하세요.
   7. **용어 통일:** 핵심 키워드는 반드시 원래 용어를 그대로 사용하고, 동의어나 다른 표현으로 바꾸지 마세요.
+  8. **강조 표기 남발 금지:** 본문에서 \`**\`, \`__\`, \`*\`, \`_\` 같은 마크다운 강조 표기는 사용하지 마세요. (단어 연결용 밑줄 \`_\`도 금지)
+     - 강조가 필요하면: 따옴표(“ ”) 또는 괄호, 혹은 문장 구조로 강조하세요.
 
   [팩트체크 출력 - 반드시 포함]
   - 원고 본문을 모두 출력한 뒤, 맨 마지막에 아래 코드 펜스를 **그대로** 붙이세요.
@@ -309,7 +311,7 @@ export default function BookSmithAI() {
   const [isTestMode, setIsTestMode] = useState(true); // 테스트 모드 기본값
   const [isAutoFactChecking, setIsAutoFactChecking] = useState(false);
   const [autoFactCheckProgress, setAutoFactCheckProgress] = useState({ current: 0, total: 0, status: '' });
-  const [factCheckMode, setFactCheckMode] = useState<'off' | 'fast' | 'web'>('fast'); // OFF | 웹 없이(빠름) | 웹 검색+출처(정확, 느림/유료화 대상)
+  const [factCheckMode, setFactCheckMode] = useState<'off' | 'fast' | 'web'>('web'); // 강제: 유저 노출 없이 항상 웹 검색+출처
   const [writingFeedback, setWritingFeedback] = useState('');
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [isFeedbackChatOpen, setIsFeedbackChatOpen] = useState(false);
@@ -367,6 +369,35 @@ export default function BookSmithAI() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const buildTocModel = () => {
+    if (!bookStructure) return [];
+    return (bookStructure.chapters || []).map((ch: any) => ({
+      chapter_number: ch.chapter_number,
+      title: ch.title,
+      subsections: (ch.subsections || []).map((s: any) => ({
+        sub_number: s.sub_number,
+        title: s.title,
+      })),
+    }));
+  };
+
+  const buildTocMarkdown = () => {
+    if (!bookStructure) return "";
+    const lines: string[] = [];
+    lines.push("## 목차");
+    lines.push("");
+    for (const ch of buildTocModel()) {
+      lines.push(`- CH.${ch.chapter_number} ${ch.title}`);
+      for (const sub of ch.subsections) {
+        lines.push(`  - ${ch.chapter_number}-${sub.sub_number}. ${sub.title}`);
+      }
+    }
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    return lines.join("\n");
+  };
+
   const extractFactsJson = (text: string): { manuscript: string; claims: any[] } => {
     if (!text) return { manuscript: "", claims: [] };
     const re = /```FACTS_JSON\s*([\s\S]*?)\s*```/m;
@@ -382,6 +413,60 @@ export default function BookSmithAI() {
     }
     const manuscript = text.replace(re, "").trim();
     return { manuscript, claims };
+  };
+
+  const sanitizeManuscript = (text: string, opts?: { sectionTitle?: string }) => {
+    if (!text) return "";
+    const sectionTitle = (opts?.sectionTitle || "").trim();
+
+    // 1) Remove common meta/length markers anywhere
+    let t = text
+      // (2,105자) / (2105자) / 2,105자
+      .replace(/\(\s*\d[\d,]*\s*자\s*\)/g, "")
+      .replace(/\b\d[\d,]*\s*자\b/g, "")
+      // "현재 분량: ..." style
+      .replace(/\(현재\s*분량\s*:\s*[^)]*\)/g, "")
+      // stray double spaces from removals
+      .replace(/[ \t]{2,}/g, " ");
+
+    // 2) Normalize "word_word" into "word word" (prevents underscore joins)
+    t = t.replace(/([0-9A-Za-z가-힣])_([0-9A-Za-z가-힣])/g, "$1 $2");
+
+    // 3) Drop redundant heading lines that repeat the current subsection title
+    const lines = t.split("\n");
+    const cleaned: string[] = [];
+    let skippedTitleOnce = false;
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      const raw = line.trim();
+      if (!raw) { cleaned.push(line); continue; }
+
+      // Remove lines that are just separators
+      if (/^[-–—]{2,}$/.test(raw)) { cleaned.push("---"); continue; }
+
+      // If model repeats the subsection title as a heading or bullet early in the section, drop it once
+      if (!skippedTitleOnce && sectionTitle) {
+        const stripped = raw
+          .replace(/^#{1,6}\s*/, "")
+          .replace(/^§\s*/, "")
+          .replace(/^\d+[-.]\d+\s*/, "") // 7-4 / 7.4
+          .trim();
+        if (stripped === sectionTitle || stripped.endsWith(sectionTitle)) {
+          skippedTitleOnce = true;
+          continue;
+        }
+      }
+
+      // 4) Demote any '#' headings to '###' (we never want raw '#' visible)
+      if (/^#{1,6}\s+/.test(raw)) {
+        const title = raw.replace(/^#{1,6}\s+/, "").trim();
+        line = `### ${title}`;
+      }
+
+      cleaned.push(line);
+    }
+
+    return cleaned.join("\n").replace(/[ \t]+\n/g, "\n").trim();
   };
 
   const openWebSearch = (q: string) => {
@@ -623,7 +708,8 @@ ${JSON.stringify({ claims }, null, 2)}
         if (parsed.bookStructure) setBookStructure(parsed.bookStructure);
         if (parsed.subsectionContents) setSubsectionContents(parsed.subsectionContents);
         if (parsed.factClaimsBySection) setFactClaimsBySection(parsed.factClaimsBySection);
-        if (parsed.factCheckMode) setFactCheckMode(parsed.factCheckMode);
+        // 강제: 유저 노출 없이 항상 웹 검색+출처
+        setFactCheckMode('web');
         if (parsed.progress) {
           // 새로고침/재접속 시: 진행 중(writing)으로 저장된 상태는 실제로는 작업이 중단된 상태이므로 'stopped'로 전환
           if (parsed.step === 'writing' && parsed.progress?.status === 'writing') {
@@ -736,7 +822,7 @@ ${JSON.stringify({ claims }, null, 2)}
     setIsFactCheckModalOpen(false);
     setIsAutoFactChecking(false);
     setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
-    setFactCheckMode('fast');
+    setFactCheckMode('web');
     setWritingFeedback('');
     setShowFeedbackInput(false);
     setIsFeedbackChatOpen(false);
@@ -900,7 +986,8 @@ ${JSON.stringify({ claims }, null, 2)}
 
   const autoFactCheckPass = async (signal?: AbortSignal) => {
     if (!AUTO_FACTCHECK_ON_COMPLETE) return;
-    if (factCheckMode === 'off') return;
+    // 강제: 유저 노출 없이 항상 웹 검색+출처
+    // (실패 시 자동으로 빠름(웹 없이) fallback)
     // claims가 있는 섹션만 대상으로 자동 팩트체크
     // 1순위: 웹 근거 기반 (/api/fact-check-web)
     // 실패 시: 로컬 보수적 안정화(단정/수치/인용 완화 or 제거) fallback
@@ -911,7 +998,7 @@ ${JSON.stringify({ claims }, null, 2)}
     setAutoFactCheckProgress({
       current: 0,
       total: keys.length,
-      status: factCheckMode === 'web' ? '팩트체크(웹 검색+출처) 중...' : '팩트체크(빠름: 웹 없이) 중...'
+      status: '팩트체크(웹 검색+출처) 중...'
     });
     try {
       await runConcurrent(
@@ -927,7 +1014,7 @@ ${JSON.stringify({ claims }, null, 2)}
           try {
             // Try web-grounded fact check first
             let rewritten: string | null = null;
-            if (factCheckMode === 'web') {
+            if (true) {
               try {
                 const res = await fetch('/api/fact-check-web', {
                   method: 'POST',
@@ -952,7 +1039,8 @@ ${JSON.stringify({ claims }, null, 2)}
               rewritten = await callGemini(originalText, factCheckInstructionForSection(key), signal);
             }
 
-            setSubsectionContents(prev => ({ ...prev, [key]: rewritten }));
+            const cleaned = sanitizeManuscript(rewritten);
+            setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
           } finally {
             setAutoFactCheckProgress(prev => ({ ...prev, current: prev.current + 1 }));
           }
@@ -1299,6 +1387,7 @@ ${JSON.stringify({ claims }, null, 2)}
     const lines = text.split('\n');
     const elements = [];
     let tableBuffer = [];
+    let inReferences = false;
 
     const flushTable = () => {
       if (tableBuffer.length === 0) return;
@@ -1309,7 +1398,7 @@ ${JSON.stringify({ claims }, null, 2)}
       }
       elements.push(
         <div key={`table-${elements.length}`} className={`my-8 overflow-hidden border ${theme.border} rounded-sm`}>
-          <table className="min-w-full text-sm text-left font-serif">
+          <table className="min-w-full text-sm text-left">
             <thead className={`${currentTheme === 'deepSpace' ? 'bg-gray-800' : 'bg-slate-100'} ${theme.previewText} border-b-2 ${theme.border}`}>
               <tr>{headers.map((h, i) => <th key={i} className="px-6 py-3 font-bold tracking-wider uppercase">{parseInline(h)}</th>)}</tr>
             </thead>
@@ -1332,41 +1421,128 @@ ${JSON.stringify({ claims }, null, 2)}
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmedLine = line.trim();
+
+      // References section toggles (from web fact-check rewriter)
+      if (/^(References|참고문헌)\s*$/i.test(trimmedLine)) {
+        flushTable();
+        inReferences = true;
+        elements.push(
+          <div key={`refs-h-${i}`} className={`mt-10 pt-6 border-t ${theme.border}`}>
+            <h2 className={`text-base font-bold tracking-wide uppercase opacity-80 ${theme.previewText}`}>{trimmedLine}</h2>
+          </div>
+        );
+        continue;
+      }
+
+      if (inReferences) {
+        // Match: [1] Title - https://...
+        const m = trimmedLine.match(/^\[(\d+)\]\s+(.*?)\s+-\s+(https?:\/\/\S+)\s*$/);
+        if (m) {
+          const n = m[1];
+          const title = m[2];
+          const url = m[3];
+          elements.push(
+            <div key={`ref-${i}`} className={`flex items-start gap-3 py-1 text-sm ${theme.previewText}`}>
+              <span className="opacity-60 font-mono shrink-0">[{n}]</span>
+              <a href={url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80 break-words">
+                {title || url}
+              </a>
+            </div>
+          );
+          continue;
+        }
+        // Stop references section on blank line + next heading
+        if (trimmedLine === '') {
+          elements.push(<div key={`ref-sp-${i}`} className="h-2" />);
+          continue;
+        }
+      }
+
       if (trimmedLine.startsWith('|')) { tableBuffer.push(trimmedLine); continue; }
       flushTable();
-      const cleanLine = line.replace(/\$\$/g, '').replace(/\\text\{([^}]+)\}/g, '$1');
+      // Normalize: remove latex-ish, and convert "word_word" (often used as emphasis by model) into "word word"
+      const cleanLine = line
+        .replace(/\$\$/g, '')
+        .replace(/\\text\{([^}]+)\}/g, '$1')
+        .replace(/([0-9A-Za-z가-힣])_([0-9A-Za-z가-힣])/g, '$1 $2');
+      if (cleanLine.match(/^#\s?/)) {
+        inReferences = false;
+        elements.push(<h2 key={i} className={`text-2xl font-bold mt-12 mb-6 ${theme.previewText} border-b pb-2 ${theme.border}`}>{parseInline(cleanLine.replace(/^#\s?/, ''))}</h2>); continue;
+      }
       if (cleanLine.match(/^###\s?/)) {
-        elements.push(<h3 key={i} className={`text-xl font-serif font-bold mt-8 mb-4 ${theme.previewText} flex items-center gap-2`}><span className={`opacity-40 text-2xl select-none ${theme.accent}`}>§</span>{parseInline(cleanLine.replace(/^###\s?/, ''))}</h3>); continue;
+        inReferences = false;
+        elements.push(<h3 key={i} className={`text-xl font-bold mt-10 mb-4 ${theme.previewText} flex items-center gap-2`}><span className={`opacity-40 text-2xl select-none ${theme.accent}`}>§</span>{parseInline(cleanLine.replace(/^###\s?/, ''))}</h3>); continue;
       }
       if (cleanLine.match(/^##\s?/)) {
-        elements.push(<h2 key={i} className={`text-2xl font-serif font-bold mt-12 mb-6 ${theme.previewText} border-b pb-2 ${theme.border}`}>{parseInline(cleanLine.replace(/^##\s?/, ''))}</h2>); continue;
+        inReferences = false;
+        elements.push(<h2 key={i} className={`text-2xl font-bold mt-12 mb-6 ${theme.previewText} border-b pb-2 ${theme.border}`}>{parseInline(cleanLine.replace(/^##\s?/, ''))}</h2>); continue;
       }
       if (trimmedLine.match(/^[-*]\s/)) {
         const content = cleanLine.replace(/^[-*]\s/, '');
-        elements.push(<div key={i} className="flex items-start gap-3 ml-2 mb-2 pl-2"><span className={`mt-2 text-[6px] shrink-0 opacity-60 ${theme.previewText}`}>●</span><p className={`flex-1 ${theme.previewText} leading-relaxed font-serif`}>{parseInline(content)}</p></div>); continue;
+        elements.push(<div key={i} className="flex items-start gap-3 ml-1 mb-2 pl-2"><span className={`mt-2 text-[6px] shrink-0 opacity-60 ${theme.previewText}`}>●</span><p className={`flex-1 ${theme.previewText} leading-relaxed`}>{parseInline(content)}</p></div>); continue;
       }
       const orderedListMatch = cleanLine.match(/^\s*(\d+)\.\s(.*)/);
       if (orderedListMatch) {
-        elements.push(<div key={i} className="flex items-start gap-2 ml-1 mb-1 pl-2"><span className={`font-bold text-sm mt-1 shrink-0 font-serif ${theme.previewText}`}>{orderedListMatch[1]}.</span><p className={`flex-1 ${theme.previewText} leading-relaxed font-serif`}>{parseInline(orderedListMatch[2])}</p></div>); continue;
+        elements.push(<div key={i} className="flex items-start gap-2 ml-1 mb-1 pl-2"><span className={`font-bold text-sm mt-1 shrink-0 ${theme.previewText}`}>{orderedListMatch[1]}.</span><p className={`flex-1 ${theme.previewText} leading-relaxed`}>{parseInline(orderedListMatch[2])}</p></div>); continue;
       }
       if (trimmedLine.startsWith('> ')) {
-        elements.push(<blockquote key={i} className={`my-6 pl-6 border-l-4 ${theme.accent.replace('text-', 'border-')} italic opacity-80 font-serif py-2 pr-2 rounded-r ${theme.previewText}`}>{parseInline(cleanLine.replace(/^>\s?/, ''))}</blockquote>); continue;
+        elements.push(<blockquote key={i} className={`my-6 pl-6 border-l-4 ${theme.accent.replace('text-', 'border-')} italic opacity-80 py-2 pr-2 rounded-r ${theme.previewText}`}>{parseInline(cleanLine.replace(/^>\s?/, ''))}</blockquote>); continue;
       }
       if (trimmedLine === '') { elements.push(<div key={i} className="h-4" />); continue; }
-      elements.push(<p key={i} className={`mb-4 leading-loose font-serif text-lg ${theme.previewText}`}>{parseInline(cleanLine)}</p>);
+      elements.push(<p key={i} className={`mb-4 text-[17px] leading-[1.95] ${theme.previewText}`}>{parseInline(cleanLine)}</p>);
     }
     flushTable();
     return elements;
   };
 
   const parseInline = (text) => {
-    const parts = text.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index} className={`font-bold ${theme.text}`}>{part.slice(2, -2)}</strong>;
+    const src = (text || "").toString();
+    const out: any[] = [];
+    let idx = 0;
+
+    const findNext = () => {
+      const candidates: Array<{ pos: number; marker: string }> = [];
+      const p1 = src.indexOf('**', idx);
+      if (p1 !== -1) candidates.push({ pos: p1, marker: '**' });
+      const p2 = src.indexOf('__', idx);
+      if (p2 !== -1) candidates.push({ pos: p2, marker: '__' });
+      const p3 = src.indexOf('*', idx);
+      if (p3 !== -1) candidates.push({ pos: p3, marker: '*' });
+      const p4 = src.indexOf('_', idx);
+      if (p4 !== -1) candidates.push({ pos: p4, marker: '_' });
+      if (candidates.length === 0) return null;
+      candidates.sort((a, b) => a.pos - b.pos || b.marker.length - a.marker.length);
+      // Ensure ** wins over * when same position, and __ wins over _
+      return candidates[0];
+    };
+
+    const pushText = (t: string) => { if (t) out.push(t); };
+
+    while (idx < src.length) {
+      const next = findNext();
+      if (!next) { pushText(src.slice(idx)); break; }
+      const { pos, marker } = next;
+      if (pos > idx) pushText(src.slice(idx, pos));
+
+      // Avoid treating "**" as "*" or "__" as "_" by preferring longer markers.
+      // If marker is single, skip if it's actually part of a double marker.
+      if (marker === '*' && src.slice(pos, pos + 2) === '**') { pushText('*'); idx = pos + 1; continue; }
+      if (marker === '_' && src.slice(pos, pos + 2) === '__') { pushText('_'); idx = pos + 1; continue; }
+
+      const end = src.indexOf(marker, pos + marker.length);
+      if (end === -1) { pushText(marker); idx = pos + marker.length; continue; }
+      const inner = src.slice(pos + marker.length, end);
+
+      const key = `inl-${pos}-${end}`;
+      if (marker === '**' || marker === '__') {
+        out.push(<strong key={key} className="font-bold">{parseInline(inner)}</strong>);
+      } else {
+        out.push(<em key={key} className="italic">{parseInline(inner)}</em>);
       }
-      return part;
-    });
+      idx = end + marker.length;
+    }
+
+    return out;
   };
 
   // --- Sequential Polishing Logic ---
@@ -1524,6 +1700,7 @@ ${JSON.stringify({ claims }, null, 2)}
       zip.folder("META-INF").file("container.xml", `<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`);
       const oebps = zip.folder("OEBPS");
       let manifestItems = "", spineItems = "", navMapItems = "";
+      let playOrder = 1;
 
       if (coverImage) {
         const imgData = coverImage.split(',')[1];
@@ -1538,6 +1715,22 @@ ${JSON.stringify({ claims }, null, 2)}
       oebps.file("title.xhtml", titlePageContent);
       manifestItems += `<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>\n`;
       spineItems += `<itemref idref="title"/>\n`;
+      navMapItems += `<navPoint id="navPoint-title" playOrder="${playOrder++}"><navLabel><text>${title}</text></navLabel><content src="title.xhtml"/></navPoint>`;
+
+      // Visible TOC page (in addition to ncx)
+      const tocItems = (bookStructure.chapters || []).map((ch, idx) => {
+        const chFilename = `chapter${idx + 1}.xhtml`;
+        const subs = (ch.subsections || []).map((sub) => {
+          const anchor = `#c${ch.chapter_number}-s${sub.sub_number}`;
+          return `<li><a href="${chFilename}${anchor}">${ch.chapter_number}-${sub.sub_number}. ${sub.title}</a></li>`;
+        }).join('');
+        return `<div style="margin-bottom: 1.2em;"><h2 style="margin:0 0 .4em 0;">CH.${ch.chapter_number} ${ch.title}</h2><ul style="margin:0; padding-left:1.2em;">${subs}</ul></div>`;
+      }).join('');
+      const tocPageContent = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Table of Contents</title><style>body{font-family:serif;line-height:1.6;padding:1.2em;} h1{margin-top:0;} a{text-decoration:none;color:#1f2937;} a:hover{text-decoration:underline;}</style></head><body><h1>목차</h1>${tocItems}</body></html>`;
+      oebps.file("toc.xhtml", tocPageContent);
+      manifestItems += `<item id="tocpage" href="toc.xhtml" media-type="application/xhtml+xml"/>\n`;
+      spineItems += `<itemref idref="tocpage"/>\n`;
+      navMapItems += `<navPoint id="navPoint-toc" playOrder="${playOrder++}"><navLabel><text>목차</text></navLabel><content src="toc.xhtml"/></navPoint>`;
 
       bookStructure.chapters.forEach((ch, idx) => {
         const chFilename = `chapter${idx + 1}.xhtml`;
@@ -1547,14 +1740,14 @@ ${JSON.stringify({ claims }, null, 2)}
           const rawContent = subsectionContents[key] || "";
           const cleanedContent = rawContent.replace(/\$\$/g, '').replace(/\\text\{([^}]+)\}/g, '$1').replace(/\\[a-zA-Z]+/g, '');
           const htmlContent = cleanedContent.replace(/^### (.*$)/gim, '<h3>$1</h3>').replace(/^## (.*$)/gim, '<h2>$1</h2>').replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>').replace(/\*\*(.*?)\*\*/gim, '<b>$1</b>').replace(/\n/gim, '<br/>');
-          chContent += `<h2>§ ${sub.title}</h2><div>${htmlContent}</div><hr/>`;
+          chContent += `<h2 id="c${ch.chapter_number}-s${sub.sub_number}">§ ${sub.title}</h2><div>${htmlContent}</div><hr/>`;
         });
         chContent += `</body></html>`;
         oebps.file(chFilename, chContent);
         const id = `ch${idx + 1}`;
         manifestItems += `<item id="${id}" href="${chFilename}" media-type="application/xhtml+xml"/>\n`;
         spineItems += `<itemref idref="${id}"/>\n`;
-        navMapItems += `<navPoint id="navPoint-${idx + 1}" playOrder="${idx + 1}"><navLabel><text>${ch.title}</text></navLabel><content src="${chFilename}"/></navPoint>`;
+        navMapItems += `<navPoint id="navPoint-${idx + 1}" playOrder="${playOrder++}"><navLabel><text>${ch.title}</text></navLabel><content src="${chFilename}"/></navPoint>`;
       });
 
       const contentOpf = `<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf"><dc:title>${title}</dc:title><dc:creator opf:role="aut">${author}</dc:creator><dc:language>ko</dc:language><dc:identifier id="BookId" opf:scheme="UUID">${uuid}</dc:identifier>${coverImage ? '<meta name="cover" content="cover-image"/>' : ''}</metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>${manifestItems}</manifest><spine toc="ncx">${spineItems}</spine></package>`;
@@ -1739,6 +1932,28 @@ ${JSON.stringify({ claims }, null, 2)}
           children: [new TextRun({ text: 'Generated by AI Book Smith', color: '888888' })],
         })
       );
+      // Visible TOC page
+      children.push(new Paragraph({ children: [new PageBreak()] }));
+      children.push(new Paragraph({ text: '목차', heading: HeadingLevel.HEADING_1 }));
+      (bookStructure.chapters || []).forEach((ch) => {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `CH.${ch.chapter_number} ${safeText(ch.title)}`, bold: true }),
+            ],
+            spacing: { after: 120 },
+          })
+        );
+        (ch.subsections || []).forEach((sub) => {
+          children.push(
+            new Paragraph({
+              numbering: { reference: 'abs-bullets', level: 0 },
+              children: [new TextRun({ text: `${ch.chapter_number}-${sub.sub_number}. ${safeText(sub.title)}` })],
+            })
+          );
+        });
+        children.push(new Paragraph({ text: '' }));
+      });
       children.push(new Paragraph({ children: [new PageBreak()] }));
 
       // Chapters
@@ -2056,7 +2271,8 @@ ${JSON.stringify({ claims }, null, 2)}
           try {
             const content = await callGemini(t.prompt, "", writingSignal);
             const { manuscript, claims } = extractFactsJson(content);
-            setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+            const cleaned = sanitizeManuscript(manuscript, { sectionTitle: t?.sub?.title });
+            setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
             if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
           } catch (error: any) {
             if (isAbortError(error)) throw error;
@@ -2103,7 +2319,7 @@ ${JSON.stringify({ claims }, null, 2)}
     setIsTestMode(true);
     setIsAutoFactChecking(false);
     setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
-    setFactCheckMode('fast');
+    setFactCheckMode('web');
     setWritingFeedback('');
     setShowFeedbackInput(false);
     setIsFeedbackChatOpen(false);
@@ -2156,7 +2372,8 @@ ${JSON.stringify({ claims }, null, 2)}
           try {
             const content = await callGemini(t.prompt, "", writingSignal);
             const { manuscript, claims } = extractFactsJson(content);
-            setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+            const cleaned = sanitizeManuscript(manuscript, { sectionTitle: t?.sub?.title });
+            setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
             if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
           } catch (error: any) {
             if (isAbortError(error)) throw error;
@@ -2237,7 +2454,8 @@ ${JSON.stringify({ claims }, null, 2)}
         try {
           const content = await callGemini(t.prompt);
           const { manuscript, claims } = extractFactsJson(content);
-          setSubsectionContents(prev => ({ ...prev, [t.key]: manuscript }));
+          const cleaned = sanitizeManuscript(manuscript);
+          setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
           if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
         } catch (error: any) {
           if (isAbortError(error)) throw error;
@@ -2258,6 +2476,7 @@ ${JSON.stringify({ claims }, null, 2)}
     if (!bookStructure) return "";
     let md = `# ${bookStructure.title}\n\n`;
     md += `> ${bookStructure.concept}\n\n`;
+    md += `${buildTocMarkdown()}`;
     md += `---\n\n`;
     bookStructure.chapters.forEach(ch => {
       md += `# Chapter ${ch.chapter_number}. ${ch.title}\n\n`;
@@ -2386,7 +2605,7 @@ ${JSON.stringify({ claims }, null, 2)}
       )}
 
       {/* Header */}
-      <header className={`border-b py-2 px-4 flex items-center justify-between sticky top-0 z-20 print:hidden ${theme.panel} ${theme.border}`}>
+      <header className={`ui-appbar py-2 px-4 flex items-center justify-between print:hidden ${theme.panel}`}>
         <div className="flex items-center gap-2.5">
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-cyan-500 rounded-lg blur-sm opacity-50 animate-pulse"></div>
@@ -2406,18 +2625,18 @@ ${JSON.stringify({ claims }, null, 2)}
           <div className="relative project-selector">
             <button
               onClick={() => setShowProjectSelector(!showProjectSelector)}
-              className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border ${theme.border} hover:bg-black/5`}
+              className={`ui-chip ui-focus flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 hover:bg-black/5`}
             >
               <File size={12} />
               {currentProjectId && projects.find(p => p.id === currentProjectId)?.name || '프로젝트 선택'}
               <ChevronDown size={10} />
             </button>
             {showProjectSelector && (
-              <div className={`absolute top-full right-0 mt-2 w-64 rounded-lg shadow-xl border z-50 ${theme.panel} ${theme.border}`}>
+              <div className={`absolute top-full right-0 mt-2 w-72 ui-card z-50 ${theme.panel}`}>
                 <div className={`p-2 border-b ${theme.border}`}>
                   <button
                     onClick={createNewProject}
-                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-bold ${theme.button} hover:opacity-90`}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-bold ui-focus ${theme.button} hover:opacity-90`}
                   >
                     <PlusCircle size={16} /> 새 프로젝트
                   </button>
@@ -2524,7 +2743,7 @@ ${JSON.stringify({ claims }, null, 2)}
         </div>
       </header>
 
-      <main className="flex-1 p-4 pb-80 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
+      <main className="flex-1 p-4 pb-20 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500">
 
         {/* Left Panel */}
         <div
@@ -2788,33 +3007,7 @@ ${JSON.stringify({ claims }, null, 2)}
                 </div>
               </div>
 
-              {/* Fact-check mode selector (good for future billing gates) */}
-              <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-bold opacity-80">팩트체크 모드</div>
-                    <div className="text-[11px] opacity-60">
-                      OFF / 빠름(웹 없이) / 정확(웹 검색+출처)
-                    </div>
-                  </div>
-                  <select
-                    value={factCheckMode}
-                    onChange={(e) => setFactCheckMode(e.target.value as any)}
-                    className={`text-xs rounded-lg px-2 py-1 border outline-none ${theme.input} ${theme.border} ${theme.text}`}
-                    title="정확(웹 검색+출처)은 느리고 비용이 들 수 있어, 향후 유료 옵션으로 두기 좋습니다."
-                  >
-                    <option value="off">OFF</option>
-                    <option value="fast">빠름(웹 없이)</option>
-                    <option value="web">정확(웹 검색+출처)</option>
-                  </select>
-                </div>
-                {isAutoFactChecking && (
-                  <div className="mt-3 text-[11px] opacity-70 flex items-center justify-between">
-                    <span>{autoFactCheckProgress.status}</span>
-                    <span>{autoFactCheckProgress.total > 0 ? `${autoFactCheckProgress.current}/${autoFactCheckProgress.total}` : ''}</span>
-                  </div>
-                )}
-              </div>
+              {/* Fact-check runs automatically in the background (hidden from user) */}
 
               {showRecoveryBanner && (step === 'writing' || progress.status === 'stopped') && (
                 <div className={`mb-4 p-3 rounded-lg border ${theme.border} ${theme.bg}`}>
@@ -3141,7 +3334,7 @@ ${JSON.stringify({ claims }, null, 2)}
             <div className={`p-4 border-b flex justify-between items-center sticky top-0 z-10 print:hidden ${theme.border} bg-opacity-90 backdrop-blur ${theme.previewBg}`}>
               <div className="flex items-center gap-2">
                 <FileText size={18} className="opacity-50" />
-                <span className="font-serif font-bold">Manuscript Preview</span>
+                <span className="font-ui font-bold tracking-tight">Manuscript Preview</span>
               </div>
               <div className="flex items-center gap-3 text-xs font-mono opacity-50">
                 {step === 'done' && (
@@ -3183,12 +3376,47 @@ ${JSON.stringify({ claims }, null, 2)}
                   )}
 
                   <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
-                    <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6">{bookStructure.title}</h1>
-                    <p className="text-2xl italic font-serif opacity-70">{bookStructure.concept}</p>
-                    <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-sans font-bold uppercase tracking-widest ${theme.accent}`}>
+                    <h1 className="text-5xl md:text-6xl font-bold mb-6 tracking-tight">{bookStructure.title}</h1>
+                    <p className="text-2xl italic opacity-70 leading-relaxed">{bookStructure.concept}</p>
+                    <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-ui font-bold uppercase tracking-widest ${theme.accent}`}>
                       <span>Written by AI Book Smith</span>
                       <span>•</span>
                       <span>{TONE_FACTORS.roles.find(r => r.id === toneSettings.role).label}</span>
+                    </div>
+                  </div>
+
+                  {/* Table of Contents (visible in preview + print + exports) */}
+                  <div className={`mb-16 print:break-after-page ${theme.border}`}>
+                    <div className="text-center mb-8">
+                      <div className="text-[11px] tracking-[0.35em] uppercase opacity-40 mb-3">Contents</div>
+                      <h2 className="text-3xl font-bold tracking-tight mb-2">목차</h2>
+                      <div className="text-sm opacity-60">Chapters & Sections</div>
+                    </div>
+                    <div className="space-y-6">
+                      {buildTocModel().map((ch: any) => (
+                        <div key={ch.chapter_number} className="space-y-2">
+                          <div className="flex items-baseline justify-between gap-4">
+                            <div className="font-bold text-lg">
+                              CH.{ch.chapter_number} <span className="font-normal opacity-90">{ch.title}</span>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+                            {ch.subsections.map((sub: any) => {
+                              const key = `${ch.chapter_number}_${sub.sub_number}`;
+                              return (
+                                <a
+                                  key={sub.sub_number}
+                                  href={`#section-${key}`}
+                                  onClick={(e) => { e.preventDefault(); jumpToSection(ch.chapter_number, sub.sub_number); }}
+                                  className="text-sm opacity-80 hover:opacity-100 underline-offset-4 hover:underline"
+                                >
+                                  {ch.chapter_number}-{sub.sub_number}. {sub.title}
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -3196,7 +3424,7 @@ ${JSON.stringify({ claims }, null, 2)}
                     <div key={ch.chapter_number} className="chapter-block print:break-before-page">
                       <div className="mb-16 mt-8 text-center">
                         <span className={`inline-block text-xs font-bold tracking-[0.3em] uppercase opacity-40 border-b pb-2 mb-4 ${theme.border}`}>Chapter {ch.chapter_number}</span>
-                        <h2 className="text-4xl font-serif font-bold">{ch.title}</h2>
+                        <h2 className="text-4xl font-bold tracking-tight">{ch.title}</h2>
                       </div>
 
                       {ch.subsections.map((sub) => {
@@ -3210,7 +3438,7 @@ ${JSON.stringify({ claims }, null, 2)}
                             id={`section-${key}`}
                             className="mb-12 subsection-block relative group scroll-mt-24"
                           >
-                            <h3 className="text-xl font-serif font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
+                            <h3 className="text-xl font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
                               <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
                             </h3>
 
@@ -3333,7 +3561,7 @@ ${JSON.stringify({ claims }, null, 2)}
                       )}
                     </div>
                     <div className={`p-3 border-t ${theme.border} ${theme.bg} text-[11px] opacity-70`}>
-                      팁: 자동 웹검색 API를 붙이면 “검색→근거 수집→검증 모델”까지 완전 자동화할 수 있어요. 지금은 원클릭 검색 + 보수적 재작성(MVP)입니다.
+                      팁: 현재는 Tavily로 자동 검색→근거 수집→수정(출처 포함)까지 진행됩니다. (키 미설정/실패 시 웹 없이 보수적 안정화로 자동 대체)
                     </div>
                   </div>
                 </div>

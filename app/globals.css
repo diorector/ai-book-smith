@@ -116,3 +116,59 @@ body {
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "liga" 1, "kern" 1;
 }
+
+/* Product-y UI primitives (Linear-ish, but warm) */
+:root {
+  --ui-radius: 14px;
+  --ui-radius-sm: 10px;
+  --ui-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
+  --ui-shadow-sm: 0 6px 16px rgba(15, 23, 42, 0.08);
+  --ui-border: rgba(15, 23, 42, 0.10);
+}
+
+.ui-card {
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--ui-border);
+  box-shadow: var(--ui-shadow-sm);
+  overflow: hidden;
+}
+
+.ui-card-flat {
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--ui-border);
+}
+
+.ui-chip {
+  border-radius: 999px;
+  border: 1px solid var(--ui-border);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+.ui-appbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-shadow {
+  box-shadow: var(--ui-shadow);
+}
+
+.ui-focus:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 2px;
+}
+
+/* Manuscript typography (BookkMyungjo) */
+.font-book .prose,
+.font-book .prose * {
+  font-family: var(--font-book);
+}
+
+.font-book .prose p {
+  line-height: 1.9;
+  letter-spacing: -0.01em;
+}
