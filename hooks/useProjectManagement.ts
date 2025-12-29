@@ -113,7 +113,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [coverConcepts, setCoverConcepts] = useState<CoverConcepts | null>(null);
   const [coverPromptUsed, setCoverPromptUsed] = useState('');
-  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('coffee');
+  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('study');
   const [includeIntroOutro, setIncludeIntroOutro] = useState(false);
   const [isTestMode, setIsTestMode] = useState(true);
   const [writingFeedback, setWritingFeedback] = useState('');

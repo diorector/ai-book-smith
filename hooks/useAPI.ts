@@ -150,22 +150,47 @@ export function useAPI() {
   }, []);
 
   /**
-   * 웹 팩트체크 API 호출
+   * 팩트체크 API 호출 (Gemini + Google Search Grounding)
+   * - 사실 관계만 확인 (교열)
    */
-  const factCheckWeb = useCallback(async (
+  const factCheck = useCallback(async (
     manuscript: string,
-    claims: unknown[],
     signal?: AbortSignal
-  ) => {
-    const res = await fetch('/api/fact-check-web', {
+  ): Promise<{ revised: string; changes: Array<{ original: string; corrected: string; reason: string }>; summary: string }> => {
+    const res = await fetch('/api/fact-check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ manuscript, claims }),
+      body: JSON.stringify({ manuscript }),
       signal,
     });
 
     if (!res.ok) {
-      throw new Error(`Fact check failed: ${res.status}`);
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || `Fact check failed: ${res.status}`);
+    }
+
+    return res.json();
+  }, []);
+
+  /**
+   * 원고 다듬기 API 호출 (교정 + 윤문)
+   * - mode: 'proofread' (교정만), 'polish' (윤문만), 'full' (둘 다)
+   */
+  const proofread = useCallback(async (
+    manuscript: string,
+    mode: 'proofread' | 'polish' | 'full' = 'full',
+    signal?: AbortSignal
+  ): Promise<{ revised: string; changes: Array<{ original: string; corrected: string; reason: string; type?: string }>; summary: string }> => {
+    const res = await fetch('/api/proofread', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manuscript, mode }),
+      signal,
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || `Proofread failed: ${res.status}`);
     }
 
     return res.json();
@@ -176,7 +201,8 @@ export function useAPI() {
     callGeminiStream,
     generateImage,
     generateCoverConcepts,
-    factCheckWeb,
+    factCheck,
+    proofread,
   };
 }
 

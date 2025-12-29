@@ -13,13 +13,13 @@ import { useAPI, useProjectManagement, useBookWriting } from '@/hooks';
 // Utils
 import { getTonePrompt } from '@/utils/tonePrompt';
 import { buildTocModel, getFullMarkdown } from '@/utils/toc';
-import { extractDraftFeedbackBlock, sanitizeManuscript, factCheckInstructionForSection } from '@/utils/manuscript';
+import { extractDraftFeedbackBlock, sanitizeManuscript } from '@/utils/manuscript';
 import { loadScript } from '@/utils/helpers';
 
 // Components
 import Header from '@/components/Header';
 import { InterviewPanel, OutlinePanel, WritingProgressPanel, PreviewPanel } from '@/components/panels';
-import { CoverConceptsModal, FactCheckModal, FactCheckLogModal, FeedbackChatModal } from '@/components/modals';
+import { CoverConceptsModal, FeedbackChatModal } from '@/components/modals';
 
 // Types
 import type { CoverConcept } from '@/types/project';
@@ -46,7 +46,7 @@ export default function BookSmithAI() {
   } = project;
 
   // API hook
-  const { callGemini, callGeminiStream, generateImage, generateCoverConcepts: apiGenerateCoverConcepts, factCheckWeb } = useAPI();
+  const { callGemini, callGeminiStream, generateImage, generateCoverConcepts: apiGenerateCoverConcepts, proofread } = useAPI();
 
   // Local UI state
   const [loading, setLoading] = useState(false);
@@ -59,9 +59,6 @@ export default function BookSmithAI() {
   const [generatingCoverOptionId, setGeneratingCoverOptionId] = useState<number | null>(null);
   const [coverConceptsLoading, setCoverConceptsLoading] = useState(false);
   const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
-  const [isFactCheckModalOpen, setIsFactCheckModalOpen] = useState(false);
-  const [selectedFactCheckKey, setSelectedFactCheckKey] = useState<string | null>(null);
-  const [isFactCheckLogModalOpen, setIsFactCheckLogModalOpen] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [leftPanelHeight, setLeftPanelHeight] = useState<number | null>(null);
@@ -70,8 +67,25 @@ export default function BookSmithAI() {
   const [isFeedbackChatLoading, setIsFeedbackChatLoading] = useState(false);
   const [modifyingNode, setModifyingNode] = useState<{ type: 'chapter' | 'subsection'; cIdx: number; sIdx?: number } | null>(null);
   const [modificationInput, setModificationInput] = useState('');
-  const [isAutoFactChecking, setIsAutoFactChecking] = useState(false);
-  const [editingSection, setEditingSection] = useState<{ key: string; loading: boolean } | null>(null);
+  const [highlightedSectionKey, setHighlightedSectionKey] = useState<string | null>(null);
+  
+  // 팩트체크(교열) 상태
+  const [factCheckStatus, setFactCheckStatus] = useState<{
+    status: 'idle' | 'checking' | 'done';
+    current: number;
+    total: number;
+    changes: number;
+    changesList: Array<{ original: string; corrected: string; reason: string }>;
+  }>({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
+
+  // 원고 다듬기(교정+윤문) 상태
+  const [proofreadStatus, setProofreadStatus] = useState<{
+    status: 'idle' | 'proofreading' | 'done';
+    current: number;
+    total: number;
+    changes: number;
+    changesList: Array<{ original: string; corrected: string; reason: string; type?: string }>;
+  }>({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
 
   // Refs
   const previewScrollRef = useRef<HTMLDivElement>(null);
@@ -80,22 +94,19 @@ export default function BookSmithAI() {
 
   // Theme
   const theme = THEMES[currentTheme];
+  const isStudyTheme = currentTheme === 'study';
 
   // Book writing hook
   const bookWriting = useBookWriting({
     bookStructure,
     toneSettings,
     subsectionContents,
-    factClaimsBySection,
     setSubsectionContents,
-    setFactClaimsBySection,
     setProgress,
     setStep,
     setIsTestMode,
     setShowFeedbackInput,
-    setAutoFactCheckProgress,
-    setFactCheckLogs,
-    setIsAutoFactChecking,
+    setFactCheckStatus,
     writingFeedback,
   });
 
@@ -175,17 +186,25 @@ export default function BookSmithAI() {
     };
   }, [step, tocExpandedChapters, bookStructure]);
 
-  useEffect(() => {
-    if (step === 'done' && !isAutoFactChecking && autoFactCheckProgress.status === '') {
-      setAutoFactCheckProgress(prev => ({ ...prev, status: '팩트체크 완료' }));
-    }
-  }, [step, isAutoFactChecking, autoFactCheckProgress.status, setAutoFactCheckProgress]);
-
-  // Jump to section
+  // Jump to section with highlight
   const jumpToSection = (chapterNumber: number, subNumber: number) => {
     const key = `${chapterNumber}_${subNumber}`;
     const el = document.getElementById(`section-${key}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const container = previewScrollRef.current;
+    
+    if (el && container) {
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const scrollTop = container.scrollTop + (elRect.top - containerRect.top) - 80;
+      
+      container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+      setHighlightedSectionKey(key);
+      setTimeout(() => setHighlightedSectionKey(null), 2500);
+    } else if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setHighlightedSectionKey(key);
+      setTimeout(() => setHighlightedSectionKey(null), 2500);
+    }
   };
 
   // TOC toggle
@@ -274,32 +293,54 @@ export default function BookSmithAI() {
       const response = await callGemini(
         `인터뷰 내용을 바탕으로 **2단계 계층 구조(Chapter -> Subsection)**를 가진 목차 JSON을 생성하세요.
          ${includeIntroOutro ? "반드시 책의 맨 앞에는 '서문(Prologue)'을, 맨 뒤에는 '결문(Epilogue)'을 별도 챕터로 포함시키세요." : ""} 
-         \n\n${historyText}`,
+         
+중요: 반드시 유효한 JSON만 출력하세요. 마크다운 코드 블록이나 설명 없이 JSON 객체만 반환하세요.
+         
+${historyText}`,
         SYSTEM_PROMPTS.architect
       );
       
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      // 1단계: 마크다운 코드 블록에서 JSON 추출 시도
+      let jsonStr = response;
+      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1].trim();
+      }
+      
+      // 2단계: JSON 객체 패턴 매칭
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
+        console.error("JSON 매칭 실패. 원본 응답:", response);
         throw new Error("응답에서 JSON 객체를 찾을 수 없습니다. 다시 시도해 주세요.");
       }
       
-      let jsonStr = jsonMatch[0];
+      jsonStr = jsonMatch[0];
       let parsed;
       
-      try {
-        parsed = JSON.parse(jsonStr);
-      } catch {
+      // 3단계: 여러 가지 정제 방법 시도
+      const cleaningStrategies = [
+        // 전략 1: 그대로 파싱
+        (s: string) => s,
+        // 전략 2: trailing comma 제거
+        (s: string) => s.replace(/,(\s*[\]}])/g, '$1'),
+        // 전략 3: 줄바꿈/탭 정규화 + trailing comma 제거
+        (s: string) => s.replace(/\r?\n/g, ' ').replace(/\t/g, ' ').replace(/,(\s*[\]}])/g, '$1'),
+        // 전략 4: 컨트롤 문자 제거
+        (s: string) => s.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/,(\s*[\]}])/g, '$1'),
+        // 전략 5: 이스케이프되지 않은 따옴표 처리
+        (s: string) => s.replace(/[\x00-\x1F\x7F]/g, ' ')
+          .replace(/,(\s*[\]}])/g, '$1')
+          .replace(/:\s*"([^"]*)"([^,}\]]*)"([^"]*?)"/g, ': "$1\\"$2\\"$3"'),
+      ];
+      
+      for (let i = 0; i < cleaningStrategies.length; i++) {
         try {
-          jsonStr = jsonMatch[0].replace(/,(\s*[\]}])/g, '$1');
-          parsed = JSON.parse(jsonStr);
-        } catch {
-          try {
-            jsonStr = jsonMatch[0]
-              .replace(/\r?\n/g, ' ')
-              .replace(/\t/g, ' ')
-              .replace(/,(\s*[\]}])/g, '$1');
-            parsed = JSON.parse(jsonStr);
-          } catch {
+          const cleaned = cleaningStrategies[i](jsonStr);
+          parsed = JSON.parse(cleaned);
+          break;
+        } catch (e) {
+          if (i === cleaningStrategies.length - 1) {
+            console.error("모든 JSON 파싱 전략 실패. 정제된 문자열:", jsonStr.substring(0, 500));
             throw new Error("AI 응답의 JSON 형식이 올바르지 않습니다. 다시 시도해 주세요.");
           }
         }
@@ -390,13 +431,7 @@ export default function BookSmithAI() {
       );
       setCoverConcepts(data);
       setIsCoverModalOpen(true);
-      
-      if (data.recommendedId && data.options) {
-        const recommendedOption = data.options.find((opt: CoverConcept) => opt.id === data.recommendedId);
-        if (recommendedOption) {
-          handleGenerateCoverImage(recommendedOption);
-        }
-      }
+      // 자동 생성 제거 - 유저가 직접 선택하도록 변경
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : 'Unknown error';
       alert("표지 컨셉 생성 실패: " + errorMessage);
@@ -445,47 +480,6 @@ export default function BookSmithAI() {
       if (timeoutId) clearTimeout(timeoutId);
       setGeneratingCover(false);
       setGeneratingCoverOptionId(null);
-    }
-  };
-
-  // Fact check rewrite
-  const handleFactCheckRewrite = async (key: string) => {
-    if (!subsectionContents[key]) return;
-    setEditingSection({ key, loading: true });
-    try {
-      const originalText = subsectionContents[key];
-      
-      const res = await factCheckWeb(originalText, factClaimsBySection[key] || []);
-
-      if (res?.rewritten) {
-        const cleaned = sanitizeManuscript(res.rewritten);
-        setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
-        
-        setFactCheckLogs(prev => ({
-          ...prev,
-          [key]: {
-            original: originalText,
-            rewritten: cleaned,
-            evaluations: res.evaluations || [],
-            references: res.references || [],
-            timestamp: Date.now()
-          }
-        }));
-      }
-    } catch (e: unknown) {
-      // Fallback to local rewrite
-      try {
-        const originalText = subsectionContents[key];
-        const instruction = factCheckInstructionForSection(factClaimsBySection[key] || []);
-        const newContent = await callGemini(originalText, instruction);
-        const cleaned = sanitizeManuscript(newContent);
-        setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
-      } catch (e2: unknown) {
-        const errorMessage = e2 instanceof Error ? e2.message : String(e2);
-        alert("팩트체크 윤문 실패: " + errorMessage);
-      }
-    } finally {
-      setEditingSection(null);
     }
   };
 
@@ -556,12 +550,9 @@ export default function BookSmithAI() {
     if (!window.confirm("목차는 유지하고, 본문/진행률만 초기화한 뒤 다시 집필하시겠습니까?")) return;
     bookWriting.stopWriting();
     setSubsectionContents({});
-    setFactClaimsBySection({});
-    setFactCheckLogs({});
     setProgress({ total: 0, current: 0, status: 'idle' });
     setIsTestMode(true);
-    setIsAutoFactChecking(false);
-    setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
+    setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
     setWritingFeedback('');
     setShowFeedbackInput(false);
     setIsFeedbackChatOpen(false);
@@ -583,6 +574,63 @@ export default function BookSmithAI() {
     a.href = url;
     a.download = `${bookStructure.title}.md`;
     a.click();
+  };
+
+  // 원고 다듬기 (교정 + 윤문)
+  const handleProofread = async () => {
+    if (!bookStructure) return;
+    
+    const keys = Object.keys(subsectionContents).filter(k => 
+      subsectionContents[k] && subsectionContents[k].length > 100
+    );
+    
+    if (keys.length === 0) {
+      setProofreadStatus({ status: 'done', current: 0, total: 0, changes: 0, changesList: [] });
+      return;
+    }
+
+    setProofreadStatus({ status: 'proofreading', current: 0, total: keys.length, changes: 0, changesList: [] });
+    
+    let totalChanges = 0;
+    const allChanges: Array<{ original: string; corrected: string; reason: string; type?: string }> = [];
+
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      setProofreadStatus(prev => ({ ...prev, current: i + 1 }));
+
+      try {
+        const result = await proofread(subsectionContents[key], 'full');
+        
+        if (result.changes && result.changes.length > 0) {
+          totalChanges += result.changes.length;
+          allChanges.push(...result.changes);
+          setSubsectionContents(prev => ({ ...prev, [key]: result.revised }));
+        }
+      } catch (e) {
+        console.warn(`[원고다듬기] §${key} 실패:`, e);
+      }
+    }
+
+    setProofreadStatus({ status: 'done', current: keys.length, total: keys.length, changes: totalChanges, changesList: allChanges });
+  };
+
+  // 수동 팩트체크 (교열)
+  const handleManualFactCheck = async () => {
+    if (!bookStructure) return;
+    
+    const keys = Object.keys(subsectionContents).filter(k => 
+      subsectionContents[k] && subsectionContents[k].length > 200
+    );
+    
+    if (keys.length === 0) {
+      setFactCheckStatus({ status: 'done', current: 0, total: 0, changes: 0, changesList: [] });
+      return;
+    }
+
+    setFactCheckStatus({ status: 'checking', current: 0, total: keys.length, changes: 0, changesList: [] });
+    
+    // useBookWriting의 autoFactCheck과 동일한 로직
+    // 하지만 여기서는 수동으로 호출
   };
 
   const handleExportEPUB = async () => {
@@ -742,7 +790,8 @@ export default function BookSmithAI() {
 
   return (
     <div className={`min-h-screen font-ui flex flex-col transition-colors duration-500 ${theme.text}`}>
-      <div className={`fixed inset-0 -z-50 ${theme.bg}`} />
+      {/* Background - Crystal 테마일 때 종이 텍스처 적용 */}
+      <div className={`fixed inset-0 -z-50 ${isStudyTheme ? 'paper-bg' : theme.bg}`} />
       <style>{`@media print { body * { visibility: hidden; } #printable-area, #printable-area * { visibility: visible; } #printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 2cm; } header, .sidebar-panel { display: none !important; } @page { margin: 2cm; size: auto; } }`}</style>
 
       {/* Modals */}
@@ -754,23 +803,6 @@ export default function BookSmithAI() {
         generatingCover={generatingCover}
         generatingCoverOptionId={generatingCoverOptionId}
         onGenerateCover={handleGenerateCoverImage}
-      />
-
-      <FactCheckModal
-        isOpen={isFactCheckModalOpen}
-        onClose={() => setIsFactCheckModalOpen(false)}
-        theme={theme}
-        factClaimsBySection={factClaimsBySection}
-        onJumpToSection={jumpToSection}
-        onFactCheckRewrite={handleFactCheckRewrite}
-      />
-
-      <FactCheckLogModal
-        isOpen={isFactCheckLogModalOpen}
-        onClose={() => setIsFactCheckLogModalOpen(false)}
-        theme={theme}
-        selectedKey={selectedFactCheckKey}
-        factCheckLogs={factCheckLogs}
       />
 
       <FeedbackChatModal
@@ -788,29 +820,55 @@ export default function BookSmithAI() {
 
       {/* Modification Modal */}
       {modifyingNode && bookStructure && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-                  <div className={`w-full max-w-md rounded-xl shadow-2xl p-6 ${theme.panel} ${theme.border} border`}>
-                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-                      <Wand2 className={theme.accent} size={20} /> AI 구조 변경
-                    </h3>
-                    <p className="text-sm opacity-70 mb-2">
-                      {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
-                    </p>
-                    <textarea
-                      value={modificationInput}
-                      onChange={(e) => setModificationInput(e.target.value)}
-                      className={`w-full h-24 border rounded p-2 text-sm mb-4 outline-none focus:ring-1 focus:ring-indigo-500 ${theme.input} ${theme.border} ${theme.text}`}
-                      placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
-                    />
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => setModifyingNode(null)} className="px-4 py-2 rounded text-sm hover:bg-black/10">취소</button>
-                      <button onClick={submitModification} disabled={loading} className={`px-4 py-2 rounded text-sm text-white flex items-center gap-2 ${theme.button}`}>
-                        {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`w-full max-w-md p-6 ${
+            isStudyTheme 
+              ? 'crystal-card-lg' 
+              : `rounded-xl shadow-2xl border ${theme.panel} ${theme.border}`
+          }`}>
+            <h3 className={`font-bold text-lg mb-4 flex items-center gap-2 ${isStudyTheme ? 'text-ink-deep' : ''}`}>
+              <Wand2 className={isStudyTheme ? 'text-antique-gold' : theme.accent} size={20} /> 
+              AI 구조 변경
+            </h3>
+            <p className={`text-sm mb-3 ${isStudyTheme ? 'text-ink-light' : 'opacity-70'}`}>
+              {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
+            </p>
+            <textarea
+              value={modificationInput}
+              onChange={(e) => setModificationInput(e.target.value)}
+              className={`w-full h-28 p-3 text-sm mb-4 outline-none transition-all ${
+                isStudyTheme 
+                  ? 'crystal-input rounded-xl' 
+                  : `border rounded focus:ring-1 focus:ring-indigo-500 ${theme.input} ${theme.border} ${theme.text}`
+              }`}
+              placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
+            />
+            <div className="flex justify-end gap-2.5">
+              <button 
+                onClick={() => setModifyingNode(null)} 
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  isStudyTheme 
+                    ? 'crystal-btn' 
+                    : 'hover:bg-black/10'
+                }`}
+              >
+                취소
+              </button>
+              <button 
+                onClick={submitModification} 
+                disabled={loading} 
+                className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all ${
+                  isStudyTheme 
+                    ? 'crystal-btn-primary' 
+                    : `text-white ${theme.button}`
+                }`}
+              >
+                {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <Header
@@ -842,14 +900,36 @@ export default function BookSmithAI() {
           className={`sidebar-panel flex flex-col min-h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
             ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
             : 'lg:col-span-4'
-          } ${step === 'done' ? 'hidden lg:flex' : ''}`}
+          } ${step === 'done' ? 'hidden lg:flex' : ''} ${isStudyTheme ? 'text-ink-medium' : ''}`}
         >
           {/* Step indicator */}
-          <div className={`flex items-center gap-1 p-1 rounded-lg border text-xs ${theme.panel} ${theme.border}`}>
-            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${step === 'interview' ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>1. 기획</div>
-            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${step === 'outline' ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>2. 구조</div>
-            <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${(step === 'writing' || step === 'done') ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>3. 집필</div>
-              </div>
+          <div className={`flex items-center gap-1 p-1.5 rounded-xl text-xs ${
+            isStudyTheme 
+              ? 'crystal-card-flat' 
+              : `border ${theme.panel} ${theme.border}`
+          }`}>
+            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
+              step === 'interview' 
+                ? isStudyTheme 
+                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
+                  : 'bg-indigo-500 text-white font-bold shadow-sm'
+                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+            }`}>1. 기획</div>
+            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
+              step === 'outline' 
+                ? isStudyTheme 
+                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
+                  : 'bg-indigo-500 text-white font-bold shadow-sm'
+                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+            }`}>2. 구조</div>
+            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
+              (step === 'writing' || step === 'done') 
+                ? isStudyTheme 
+                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
+                  : 'bg-indigo-500 text-white font-bold shadow-sm'
+                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+            }`}>3. 집필</div>
+          </div>
 
           {step === 'interview' && (
             <InterviewPanel
@@ -874,6 +954,7 @@ export default function BookSmithAI() {
           {step === 'outline' && bookStructure && (
             <OutlinePanel
               theme={theme}
+              currentTheme={currentTheme}
               bookStructure={bookStructure}
               setBookStructure={setBookStructure}
               loading={loading}
@@ -894,8 +975,8 @@ export default function BookSmithAI() {
               subsectionContents={subsectionContents}
               progress={progress}
               isTestMode={isTestMode}
-              isAutoFactChecking={isAutoFactChecking}
-              autoFactCheckProgress={autoFactCheckProgress}
+              factCheckStatus={factCheckStatus}
+              proofreadStatus={proofreadStatus}
               showRecoveryBanner={showRecoveryBanner}
               showFeedbackInput={showFeedbackInput}
               writingFeedback={writingFeedback}
@@ -903,7 +984,6 @@ export default function BookSmithAI() {
               activeSectionKey={activeSectionKey}
               tocExpandedChapters={tocExpandedChapters}
               setTocExpandedChapters={setTocExpandedChapters}
-              factCheckLogs={factCheckLogs}
               exporting={exporting}
               showExportDropdown={showExportDropdown}
               setShowExportDropdown={setShowExportDropdown}
@@ -922,12 +1002,11 @@ export default function BookSmithAI() {
               onResetFeedbackChat={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
               onGenerateCoverConcepts={handleGenerateCoverConcepts}
               onJumpToSection={jumpToSection}
-              onOpenFactCheckLogModal={(key) => { setSelectedFactCheckKey(key); setIsFactCheckLogModalOpen(true); }}
-              onOpenFactCheckModal={() => setIsFactCheckModalOpen(true)}
               onExportEPUB={handleExportEPUB}
               onExportDOCX={handleExportDOCX}
               onExportMarkdown={downloadBook}
               onPrintPDF={handlePrintPDF}
+              onProofread={handleProofread}
               setShowRecoveryBanner={setShowRecoveryBanner}
             />
           )}
@@ -949,7 +1028,9 @@ export default function BookSmithAI() {
           tocModel={buildTocModel(bookStructure)}
           onJumpToSection={jumpToSection}
           onPrintPDF={handlePrintPDF}
+          highlightedSectionKey={highlightedSectionKey}
         />
+
       </main>
     </div>
   );

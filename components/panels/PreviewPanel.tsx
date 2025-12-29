@@ -23,6 +23,7 @@ interface PreviewPanelProps {
   tocModel: TocChapter[];
   onJumpToSection: (chapterNumber: number, subNumber: number) => void;
   onPrintPDF: () => void;
+  highlightedSectionKey?: string | null;
 }
 
 export default function PreviewPanel({
@@ -40,6 +41,7 @@ export default function PreviewPanel({
   tocModel,
   onJumpToSection,
   onPrintPDF,
+  highlightedSectionKey,
 }: PreviewPanelProps) {
   if (step === 'interview') return null;
 
@@ -148,11 +150,17 @@ export default function PreviewPanel({
                   const key = `${ch.chapter_number}_${sub.sub_number}`;
                   const content = subsectionContents[key];
 
+                  const isHighlighted = highlightedSectionKey === key;
+                  
                   return (
                     <div
                       key={sub.sub_number}
                       id={`section-${key}`}
-                      className="mb-12 subsection-block relative group scroll-mt-24"
+                      className={`mb-12 subsection-block relative group scroll-mt-24 transition-all duration-500 ${
+                        isHighlighted 
+                          ? 'ring-4 ring-amber-400/60 bg-amber-50/30 rounded-xl -mx-4 px-4 py-2 shadow-lg shadow-amber-200/50' 
+                          : ''
+                      }`}
                     >
                       <h3 className="text-xl font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
                         <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}

@@ -1,4 +1,23 @@
 export const THEMES = {
+  // 🔮 NEW: Crystal Paperweight - Warm Glassmorphism
+  study: {
+    name: 'The Study',
+    bg: 'paper-bg',
+    text: 'text-ink-medium',
+    panel: 'crystal-panel',
+    border: 'border-[rgba(180,160,140,0.28)]',
+    input: 'crystal-input',
+    accent: 'text-antique-gold',
+    button: 'crystal-btn-primary',
+    previewBg: 'bg-paper-cream',
+    previewText: 'text-ink-deep',
+    // Extended crystal theme properties
+    card: 'crystal-card',
+    cardFlat: 'crystal-card-flat',
+    appbar: 'crystal-appbar',
+    chip: 'crystal-chip',
+    divider: 'crystal-divider',
+  },
   midnight: {
     name: 'Midnight',
     bg: 'bg-slate-900',

@@ -1,15 +1,14 @@
 'use client';
 
 import { useRef, useCallback } from 'react';
-import { SYSTEM_PROMPTS, WRITE_CONCURRENCY, TEST_SECTIONS_MAX, FACTCHECK_CONCURRENCY, AUTO_FACTCHECK_ON_COMPLETE } from '@/constants';
+import { SYSTEM_PROMPTS, WRITE_CONCURRENCY, TEST_SECTIONS_MAX, FACTCHECK_CONCURRENCY } from '@/constants';
 import { useAPI } from './useAPI';
 import { runConcurrent, isAbortError } from '@/utils/helpers';
-import { extractFactsJson, sanitizeManuscript, factCheckInstructionForSection } from '@/utils/manuscript';
+import { sanitizeManuscript } from '@/utils/manuscript';
 import { getTonePrompt } from '@/utils/tonePrompt';
 import type { BookStructure, Chapter, Subsection } from '@/types/book';
 import type { ToneSettings } from '@/constants/toneFactors';
 import type { Progress } from '@/types/project';
-import type { FactClaim, FactCheckLog } from '@/types/factCheck';
 
 interface WritingTask {
   chapter: Chapter;
@@ -22,16 +21,12 @@ interface UseBookWritingParams {
   bookStructure: BookStructure | null;
   toneSettings: ToneSettings;
   subsectionContents: Record<string, string>;
-  factClaimsBySection: Record<string, FactClaim[]>;
   setSubsectionContents: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  setFactClaimsBySection: React.Dispatch<React.SetStateAction<Record<string, FactClaim[]>>>;
   setProgress: React.Dispatch<React.SetStateAction<Progress>>;
   setStep: (step: string) => void;
   setIsTestMode: (testMode: boolean) => void;
   setShowFeedbackInput: (show: boolean) => void;
-  setAutoFactCheckProgress: React.Dispatch<React.SetStateAction<{ current: number; total: number; status: string }>>;
-  setFactCheckLogs: React.Dispatch<React.SetStateAction<Record<string, FactCheckLog>>>;
-  setIsAutoFactChecking: (checking: boolean) => void;
+  setFactCheckStatus: React.Dispatch<React.SetStateAction<{ status: 'idle' | 'checking' | 'done'; current: number; total: number; changes: number; changesList: Array<{ original: string; corrected: string; reason: string }> }>>;
   writingFeedback: string;
 }
 
@@ -40,20 +35,16 @@ export function useBookWriting(params: UseBookWritingParams) {
     bookStructure,
     toneSettings,
     subsectionContents,
-    factClaimsBySection,
     setSubsectionContents,
-    setFactClaimsBySection,
     setProgress,
     setStep,
     setIsTestMode,
     setShowFeedbackInput,
-    setAutoFactCheckProgress,
-    setFactCheckLogs,
-    setIsAutoFactChecking,
+    setFactCheckStatus,
     writingFeedback,
   } = params;
 
-  const { callGemini, factCheckWeb } = useAPI();
+  const { callGemini, factCheck, proofread } = useAPI();
   const writingAbortRef = useRef<AbortController | null>(null);
 
   const buildTasks = useCallback((testMode: boolean, tonePrompt: string, bookSummary: string): WritingTask[] => {
@@ -82,7 +73,6 @@ export function useBookWriting(params: UseBookWritingParams) {
       return tasks;
     }
 
-    // 전체 모드
     for (const chapter of chapters) {
       for (const sub of (chapter.subsections || [])) {
         const key = `${chapter.chapter_number}_${sub.sub_number}`;
@@ -93,92 +83,61 @@ export function useBookWriting(params: UseBookWritingParams) {
     return tasks;
   }, [bookStructure]);
 
-  const autoFactCheckPass = useCallback(async (signal?: AbortSignal) => {
-    if (!AUTO_FACTCHECK_ON_COMPLETE) return;
-
-    const keys = Object.keys(factClaimsBySection || {}).filter((key) => {
-      const claims = factClaimsBySection[key] || [];
-      return claims.some(c => c.confidence === 'low' || c.confidence === 'medium');
-    });
-
+  /**
+   * 배치 자동 팩트체크 (Gemini + Google Search Grounding)
+   * - 여러 섹션을 동시에 처리 (FACTCHECK_CONCURRENCY 만큼 병렬)
+   * - Gemini Free tier: 15 RPM → 안전하게 5개 동시 처리
+   */
+  const autoFactCheck = useCallback(async (
+    contents: Record<string, string>,
+    signal?: AbortSignal
+  ) => {
+    const keys = Object.keys(contents).filter(k => contents[k] && contents[k].length > 200);
+    
     if (keys.length === 0) {
-      setAutoFactCheckProgress({ current: 0, total: 0, status: '팩트체크 완료 (낮은 신뢰도 항목 없음)' });
+      setFactCheckStatus({ status: 'done', current: 0, total: 0, changes: 0, changesList: [] });
       return;
     }
 
-    setIsAutoFactChecking(true);
-    setAutoFactCheckProgress({
-      current: 0,
-      total: keys.length,
-      status: '낮은 신뢰도 항목 팩트체크(Tavily) 중...'
-    });
+    setFactCheckStatus({ status: 'checking', current: 0, total: keys.length, changes: 0, changesList: [] });
+    
+    // 동시 수정 횟수와 변경사항 목록을 관리
+    let totalChanges = 0;
+    let completed = 0;
+    const allChanges: Array<{ original: string; corrected: string; reason: string }> = [];
 
     try {
       await runConcurrent(
         keys,
         FACTCHECK_CONCURRENCY,
         async (key) => {
-          if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-          const originalText = subsectionContents[key];
-          if (!originalText) {
-            setAutoFactCheckProgress(prev => ({ ...prev, current: prev.current + 1 }));
-            return;
-          }
-
           try {
-            let rewritten: string | null = null;
-
-            try {
-              const data = await factCheckWeb(originalText, factClaimsBySection[key] || [], signal);
-              if (data?.rewritten) {
-                rewritten = data.rewritten;
-                setFactCheckLogs(prev => ({
-                  ...prev,
-                  [key]: {
-                    original: originalText,
-                    rewritten: data.rewritten,
-                    evaluations: data.evaluations || [],
-                    references: data.references || [],
-                    timestamp: Date.now()
-                  }
-                }));
-              }
-            } catch (e) {
-              console.warn(`Web fact check failed for ${key}, falling back to local:`, e);
+            const result = await factCheck(contents[key], signal);
+            
+            if (result.changes && result.changes.length > 0) {
+              totalChanges += result.changes.length;
+              allChanges.push(...result.changes);
+              setSubsectionContents(prev => ({ ...prev, [key]: sanitizeManuscript(result.revised) }));
             }
-
-            if (!rewritten) {
-              const instruction = factCheckInstructionForSection(factClaimsBySection[key] || []);
-              rewritten = await callGemini(originalText, instruction, signal);
-              const cleanedFallback = sanitizeManuscript(rewritten);
-              
-              setFactCheckLogs(prev => ({
-                ...prev,
-                [key]: {
-                  original: originalText,
-                  rewritten: cleanedFallback,
-                  evaluations: [], // Local fallback doesn't have evaluations
-                  references: [],
-                  timestamp: Date.now(),
-                  isLocalOnly: true
-                }
-              }));
-              rewritten = cleanedFallback;
-            }
-
-            const cleaned = sanitizeManuscript(rewritten);
-            setSubsectionContents(prev => ({ ...prev, [key]: cleaned }));
+          } catch (e) {
+            if (isAbortError(e)) throw e;
+            console.warn(`[팩트체크] §${key} 실패:`, e);
+            // 실패해도 계속 진행
           } finally {
-            setAutoFactCheckProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            completed++;
+            setFactCheckStatus(prev => ({ ...prev, current: completed, changes: totalChanges, changesList: [...allChanges] }));
           }
         },
         signal
       );
-      setAutoFactCheckProgress(prev => ({ ...prev, status: '팩트체크 완료' }));
-    } finally {
-      setIsAutoFactChecking(false);
+    } catch (e) {
+      if (isAbortError(e)) {
+        console.log('[팩트체크] 사용자에 의해 중단됨');
+      }
     }
-  }, [factClaimsBySection, subsectionContents, callGemini, factCheckWeb, setAutoFactCheckProgress, setFactCheckLogs, setIsAutoFactChecking, setSubsectionContents]);
+
+    setFactCheckStatus({ status: 'done', current: keys.length, total: keys.length, changes: totalChanges, changesList: allChanges });
+  }, [factCheck, setFactCheckStatus, setSubsectionContents]);
 
   const startDeepWriting = useCallback(async (testMode: boolean = false) => {
     if (!bookStructure) return;
@@ -191,6 +150,7 @@ export function useBookWriting(params: UseBookWritingParams) {
 
     setStep('writing');
     setIsTestMode(testMode);
+    setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
     
     const tonePrompt = getTonePrompt(toneSettings);
     const bookSummary = await callGemini(
@@ -202,6 +162,8 @@ export function useBookWriting(params: UseBookWritingParams) {
     const tasks = buildTasks(testMode, tonePrompt, bookSummary);
     setProgress({ total: tasks.length, current: 0, status: 'writing' });
 
+    const newContents: Record<string, string> = {};
+
     try {
       await runConcurrent(
         tasks,
@@ -209,10 +171,13 @@ export function useBookWriting(params: UseBookWritingParams) {
         async (t) => {
           try {
             const content = await callGemini(t.prompt, "", writingSignal);
-            const { manuscript, claims } = extractFactsJson(content);
-            const cleaned = sanitizeManuscript(manuscript, { sectionTitle: t.sub.title });
+            // FACTS_JSON 블록 제거 (팩트체크에서 별도로 처리)
+            const cleaned = sanitizeManuscript(
+              content.replace(/```FACTS_JSON[\s\S]*?```/g, '').trim(),
+              { sectionTitle: t.sub.title }
+            );
             setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
-            if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
+            newContents[t.key] = cleaned;
           } catch (error) {
             if (isAbortError(error)) throw error;
             setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
@@ -223,7 +188,8 @@ export function useBookWriting(params: UseBookWritingParams) {
         writingSignal
       );
 
-      await autoFactCheckPass(writingSignal);
+      // 글쓰기 완료 후 자동 팩트체크 (테스트 모드에서도 실행)
+      await autoFactCheck(newContents, writingSignal);
 
       if (testMode) {
         setProgress(prev => ({ ...prev, status: 'test-complete' }));
@@ -242,7 +208,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     } finally {
       writingAbortRef.current = null;
     }
-  }, [bookStructure, toneSettings, buildTasks, callGemini, autoFactCheckPass, setStep, setIsTestMode, setProgress, setSubsectionContents, setFactClaimsBySection, setShowFeedbackInput]);
+  }, [bookStructure, toneSettings, buildTasks, callGemini, autoFactCheck, setStep, setIsTestMode, setProgress, setSubsectionContents, setShowFeedbackInput, setFactCheckStatus]);
 
   const resumeDeepWriting = useCallback(async () => {
     if (!bookStructure) return;
@@ -255,6 +221,7 @@ export function useBookWriting(params: UseBookWritingParams) {
 
     setStep('writing');
     setProgress((prev) => ({ ...prev, status: 'writing' }));
+    setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
 
     const tonePrompt = getTonePrompt(toneSettings);
     const bookSummary = await callGemini(
@@ -267,6 +234,8 @@ export function useBookWriting(params: UseBookWritingParams) {
     const alreadyCount = Object.values(subsectionContents).filter(isGoodContent).length;
     const totalAll = bookStructure.chapters.reduce((acc, ch) => acc + (ch.subsections?.length || 0), 0);
     setProgress({ total: totalAll, current: alreadyCount, status: 'writing' });
+
+    const newContents: Record<string, string> = { ...subsectionContents };
 
     try {
       const tasks: WritingTask[] = [];
@@ -286,10 +255,12 @@ export function useBookWriting(params: UseBookWritingParams) {
         async (t) => {
           try {
             const content = await callGemini(t.prompt, "", writingSignal);
-            const { manuscript, claims } = extractFactsJson(content);
-            const cleaned = sanitizeManuscript(manuscript, { sectionTitle: t.sub.title });
+            const cleaned = sanitizeManuscript(
+              content.replace(/```FACTS_JSON[\s\S]*?```/g, '').trim(),
+              { sectionTitle: t.sub.title }
+            );
             setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
-            if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
+            newContents[t.key] = cleaned;
           } catch (error) {
             if (isAbortError(error)) throw error;
             setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
@@ -300,7 +271,8 @@ export function useBookWriting(params: UseBookWritingParams) {
         writingSignal
       );
 
-      await autoFactCheckPass(writingSignal);
+      // 자동 팩트체크
+      await autoFactCheck(newContents, writingSignal);
 
       setProgress(prev => ({ ...prev, status: 'done' }));
       setStep('done');
@@ -314,7 +286,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     } finally {
       writingAbortRef.current = null;
     }
-  }, [bookStructure, toneSettings, subsectionContents, callGemini, autoFactCheckPass, setStep, setProgress, setSubsectionContents, setFactClaimsBySection]);
+  }, [bookStructure, toneSettings, subsectionContents, callGemini, autoFactCheck, setStep, setProgress, setSubsectionContents, setFactCheckStatus]);
 
   const continueWritingWithFeedback = useCallback(async () => {
     if (!writingFeedback.trim() || !bookStructure) {
@@ -324,6 +296,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     
     setShowFeedbackInput(false);
     setProgress(prev => ({ ...prev, status: 'writing' }));
+    setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
     
     const tonePrompt = getTonePrompt(toneSettings);
     const bookSummary = await callGemini(
@@ -347,6 +320,8 @@ export function useBookWriting(params: UseBookWritingParams) {
     
     const alreadyCount = Object.values(subsectionContents).filter(isGoodContent).length;
     setProgress({ total: alreadyCount + tasks.length, current: alreadyCount, status: 'writing' });
+
+    const newContents: Record<string, string> = { ...subsectionContents };
     
     await runConcurrent(
       tasks,
@@ -354,10 +329,12 @@ export function useBookWriting(params: UseBookWritingParams) {
       async (t) => {
         try {
           const content = await callGemini(t.prompt);
-          const { manuscript, claims } = extractFactsJson(content);
-          const cleaned = sanitizeManuscript(manuscript, { sectionTitle: t.sub.title });
+          const cleaned = sanitizeManuscript(
+            content.replace(/```FACTS_JSON[\s\S]*?```/g, '').trim(),
+            { sectionTitle: t.sub.title }
+          );
           setSubsectionContents(prev => ({ ...prev, [t.key]: cleaned }));
-          if (claims?.length) setFactClaimsBySection(prev => ({ ...prev, [t.key]: claims }));
+          newContents[t.key] = cleaned;
         } catch (error) {
           if (isAbortError(error)) throw error;
           setSubsectionContents(prev => ({ ...prev, [t.key]: "[Error generating this section]" }));
@@ -367,11 +344,12 @@ export function useBookWriting(params: UseBookWritingParams) {
       }
     );
 
-    await autoFactCheckPass();
+    // 자동 팩트체크
+    await autoFactCheck(newContents);
     
     setProgress(prev => ({ ...prev, status: 'done' }));
     setStep('done');
-  }, [bookStructure, toneSettings, subsectionContents, writingFeedback, callGemini, autoFactCheckPass, setShowFeedbackInput, setProgress, setSubsectionContents, setFactClaimsBySection, setStep]);
+  }, [bookStructure, toneSettings, subsectionContents, writingFeedback, callGemini, autoFactCheck, setShowFeedbackInput, setProgress, setSubsectionContents, setStep, setFactCheckStatus]);
 
   const stopWriting = useCallback(() => {
     if (writingAbortRef.current) {
@@ -387,4 +365,3 @@ export function useBookWriting(params: UseBookWritingParams) {
     writingAbortRef,
   };
 }
-
