@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { X, Send, Loader2, User } from 'lucide-react';
+import { X, ArrowRight, Loader2 } from 'lucide-react';
 import type { Theme } from '@/constants/themes';
 import type { FeedbackChatMessage } from '@/types/project';
 import MarkdownRenderer from '../MarkdownRenderer';
@@ -32,61 +32,62 @@ export default function FeedbackChatModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div className={`w-full max-w-2xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
-        <div className={`p-3 border-b flex items-center justify-between ${theme.border}`}>
-          <div className="font-bold text-sm flex items-center gap-2 text-[#4A3B32]">
-            <User size={16} className="text-[#8C6B5D]" /> 피드백 대화
-          </div>
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="w-full max-w-2xl bg-[var(--paper)] border border-[var(--stone)] rounded shadow-xl overflow-hidden">
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-[var(--stone)] flex items-center justify-between">
+          <h3 className="font-semibold text-sm text-[var(--ink)]">피드백 대화</h3>
           <button
             onClick={onClose}
-            className="p-2 rounded hover:bg-[#D4C5A9]/50"
-            title="닫기"
+            className="p-1.5 rounded hover:bg-[var(--stone)] transition-colors"
           >
-            <X size={16} />
+            <X size={16} className="text-[var(--ink-muted)]" />
           </button>
         </div>
-        <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+
+        {/* Messages */}
+        <div className="p-5 max-h-[55vh] overflow-y-auto">
           {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${m.role === 'user'
-                ? 'bg-[#8C6B5D] text-white rounded-tr-none'
-                : 'bg-[#F5F1E8] text-[#4A3B32] rounded-tl-none border border-[#D4C5A9]'
-              }`}>
+            <div key={i} className="ed-message">
+              <div className="ed-message-label">
+                {m.role === 'user' ? '작가' : '에디터'}
+              </div>
+              <div className={`ed-message-content ${m.role === 'user' ? 'ed-message-user' : ''}`}>
                 <MarkdownRenderer text={m.content} theme={theme} />
               </div>
             </div>
           ))}
         </div>
-        <div className={`p-3 border-t ${theme.border} ${theme.bg}`}>
+
+        {/* Input */}
+        <div className="px-5 py-4 border-t border-[var(--stone)] bg-[var(--paper-warm)]">
           <div className="flex gap-2">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && onSend()}
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && onSend()}
               disabled={isLoading}
-              placeholder="피드백을 적고 Enter..."
-              className={`flex-1 border rounded-lg px-3 py-2 outline-none ${theme.input} ${theme.border} ${theme.text} focus:border-[#8C6B5D]`}
+              placeholder="피드백을 입력하세요..."
+              className="ed-input flex-1"
             />
             <button
               onClick={onSend}
               disabled={isLoading || !input.trim()}
-              className={`px-3 py-2 rounded-lg text-white font-bold ${theme.button} disabled:opacity-50`}
+              className="px-3 py-2 rounded bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors disabled:opacity-50"
             >
-              {isLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+              {isLoading ? <Loader2 className="animate-spin" size={16} /> : <ArrowRight size={16} />}
             </button>
             <button
               onClick={onFinalize}
               disabled={isLoading || messages.length < 2}
-              className={`px-3 py-2 rounded-lg font-bold border ${theme.border} hover:bg-[#EBE5CE] disabled:opacity-50`}
-              title="대화 내용을 지침으로 확정"
+              className="px-4 py-2 rounded font-medium border border-[var(--stone-dark)] text-[var(--ink)] hover:bg-[var(--stone)] transition-colors disabled:opacity-50"
             >
               확정
             </button>
           </div>
-          <div className="mt-2 text-[11px] opacity-70">
-            팁: 여러 번 왔다갔다 한 뒤 <b>확정</b>을 누르면, 현재 대화를 집필 지침으로 요약해 자동 반영합니다.
-          </div>
+          <p className="mt-2 text-[10px] text-[var(--ink-muted)]">
+            대화 후 확정을 누르면 집필 지침으로 반영됩니다
+          </p>
         </div>
       </div>
     </div>

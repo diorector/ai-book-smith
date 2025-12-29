@@ -100,6 +100,70 @@ export const AUTHOR_PRESETS = [
     featured: false,
     samplePreview: '신뢰를 원하세요? 먼저 취약해지세요. "모르겠어요"라고 말하는 용기, 실수를 인정하는 용기. 완벽함은 연결을 만들지 못합니다.',
   },
+  {
+    id: 'kimhoon',
+    label: '김훈',
+    desc: '절제된 문장 · 관찰 · 묵직함',
+    prompt: '김훈의 문체로 작성하세요: 문장은 짧고 단단해야 합니다. 감정 과잉을 피하고, 눈앞의 장면과 사실을 관찰하듯 서술합니다. 수식어는 최소화하고, 단문과 여백으로 리듬을 만듭니다. 결론을 과장하지 않고 독자가 스스로 판단할 여지를 남깁니다.',
+    featured: false,
+    samplePreview: '말은 길어지면 흐려진다. 중요한 건 단 하나다. 무엇을 약속했고, 무엇을 지켰는가.',
+  },
+  {
+    id: 'kimyoungha',
+    label: '김영하(에세이 톤)',
+    desc: '위트 · 명료함 · 가벼운 반전',
+    prompt: '김영하(에세이)의 문체로 작성하세요: 가볍게 시작해 핵심을 명료하게 꿰뚫습니다. 독자에게 말을 걸 듯 자연스럽고, 과장하지 않는 유머로 긴장을 풀어줍니다. 문장은 매끈하게 정리하되, 마지막에 작은 반전이나 질문으로 생각을 남깁니다.',
+    featured: false,
+    samplePreview: '대부분의 문제는 복잡하지 않다. 우리가 복잡하게 말할 뿐이다. 한 문장으로 다시 말해보자.',
+  },
+  {
+    id: 'parkwoohyun',
+    label: '박웅현',
+    desc: '카피 감각 · 리듬 · 한 문장',
+    prompt: '박웅현의 문체로 작성하세요: 문장을 짧게 끊어 리듬을 만들고, 핵심을 한 문장으로 꽂아 넣습니다. 추상적인 말보다 감각적인 단어를 고르고, 독자의 마음에 남을 슬로건 같은 문장을 설계합니다. 과하게 설명하기보다 한 줄로 확신을 전달합니다.',
+    featured: false,
+    samplePreview: '고객은 설명을 사지 않는다. 확신을 산다. 그러니 한 문장으로 끝내라.',
+  },
+  {
+    id: 'morganhousel',
+    label: 'Morgan Housel',
+    desc: '담담한 인사이트 · 사례 · 인간 심리',
+    prompt: 'Morgan Housel의 문체로 작성하세요: 차분한 어조로 일상적 사례에서 인사이트를 끌어냅니다. 숫자보다 사람의 심리와 습관을 강조하고, 극적인 결론 대신 자연스럽게 고개가 끄덕여지는 메시지를 만듭니다. 짧은 이야기로 시작해 원리로 확장합니다.',
+    featured: false,
+    samplePreview: '사람들은 데이터를 기억하지 않는다. 자기 경험과 닮은 이야기만 오래 기억한다.',
+  },
+  {
+    id: 'calnewport',
+    label: 'Cal Newport',
+    desc: '원칙 · 집중 · 구조화된 실행',
+    prompt: 'Cal Newport의 문체로 작성하세요: 원칙을 먼저 세우고, 그 원칙을 실행 가능한 규칙으로 바꿉니다. 주의 분산을 경계하며 집중과 시스템을 강조합니다. 목록과 단계 구조로 정리하고, 독자가 바로 따라할 수 있게 명확한 제약과 루틴을 제시합니다.',
+    featured: false,
+    samplePreview: '성과는 의지가 아니라 환경에서 나온다. 규칙을 설계하고, 그 안에서 반복하라.',
+  },
+  {
+    id: 'sethgodin',
+    label: 'Seth Godin',
+    desc: '설득 · 펀치라인 · 짧은 단락',
+    prompt: 'Seth Godin의 문체로 작성하세요: 짧은 단락과 강한 한 문장으로 설득합니다. 대중 전체가 아니라 특정한 사람들에게 말하듯 선명한 메시지를 던집니다. 질문을 섞어 독자의 생각을 움직이고, 불필요한 배경설명은 과감히 덜어냅니다.',
+    featured: false,
+    samplePreview: '대중을 설득하려 하지 말고, “당신의 사람”에게 먼저 선명해져라.',
+  },
+  {
+    id: 'paulgraham',
+    label: 'Paul Graham',
+    desc: '사고 전개 · 논증 · 긴 호흡',
+    prompt: 'Paul Graham의 문체로 작성하세요: 작은 관찰에서 출발해 논리를 쌓아 올립니다. 단정하지 않고 “왜 그런가”를 끝까지 따라가며 사고를 전개합니다. 예시와 반례를 통해 개념을 다듬고, 독자가 스스로 생각하게 만드는 질문으로 마무리합니다.',
+    featured: false,
+    samplePreview: '좋은 아이디어는 대개 작은 불편에서 시작한다. 그 불편을 끝까지 따라가 보자.',
+  },
+  {
+    id: 'oliverburkeman',
+    label: 'Oliver Burkeman',
+    desc: '성찰 · 역설 · 담담한 유머',
+    prompt: 'Oliver Burkeman의 문체로 작성하세요: 지나친 최적화 욕망을 역설적으로 비틀어 성찰을 이끌어냅니다. 따뜻하고 담담한 유머를 섞되, 독자를 몰아붙이지 않습니다. 완벽주의의 함정을 드러내고, “더 덜어내는” 선택을 제안합니다.',
+    featured: false,
+    samplePreview: '완벽한 계획을 기다리는 동안, 우리는 오늘을 잃는다. 적당히 불완전하게 시작하자.',
+  },
 ] as const;
 
 // 프리셋별 추천 설정 매핑
@@ -116,6 +180,14 @@ export const PRESET_DEFAULTS: Record<string, { role: string; tone: string; style
   dobelli: { role: 'mentor', tone: 'direct', style: 'concise', difficulty: 3 },
   jaeseung: { role: 'friend', tone: 'curious', style: 'casual', difficulty: 2 },
   brene: { role: 'mentor', tone: 'warm', style: 'narrative', difficulty: 2 },
+  kimhoon: { role: 'storyteller', tone: 'calm', style: 'literary', difficulty: 3 },
+  kimyoungha: { role: 'friend', tone: 'curious', style: 'casual', difficulty: 2 },
+  parkwoohyun: { role: 'mentor', tone: 'direct', style: 'concise', difficulty: 2 },
+  morganhousel: { role: 'storyteller', tone: 'calm', style: 'narrative', difficulty: 3 },
+  calnewport: { role: 'expert', tone: 'direct', style: 'analytical', difficulty: 3 },
+  sethgodin: { role: 'mentor', tone: 'provocative', style: 'concise', difficulty: 2 },
+  paulgraham: { role: 'expert', tone: 'curious', style: 'analytical', difficulty: 4 },
+  oliverburkeman: { role: 'mentor', tone: 'warm', style: 'narrative', difficulty: 3 },
 };
 
 // 스타일 DNA (시각화용)
@@ -132,6 +204,14 @@ export const STYLE_DNA: Record<string, { conciseness: number; formality: number;
   dobelli: { conciseness: 85, formality: 55, emotionality: 25, directness: 80, tags: ['#명료', '#편향', '#실용'] },
   jaeseung: { conciseness: 65, formality: 35, emotionality: 60, directness: 65, tags: ['#뇌과학', '#유쾌', '#호기심'] },
   brene: { conciseness: 55, formality: 40, emotionality: 90, directness: 75, tags: ['#취약함', '#용기', '#진정성'] },
+  kimhoon: { conciseness: 75, formality: 65, emotionality: 35, directness: 60, tags: ['#절제', '#관찰'] },
+  kimyoungha: { conciseness: 70, formality: 35, emotionality: 55, directness: 60, tags: ['#위트', '#명료'] },
+  parkwoohyun: { conciseness: 90, formality: 45, emotionality: 45, directness: 85, tags: ['#카피', '#리듬'] },
+  morganhousel: { conciseness: 65, formality: 55, emotionality: 45, directness: 55, tags: ['#인사이트', '#담담'] },
+  calnewport: { conciseness: 70, formality: 70, emotionality: 20, directness: 75, tags: ['#원칙', '#집중'] },
+  sethgodin: { conciseness: 90, formality: 40, emotionality: 35, directness: 90, tags: ['#설득', '#펀치라인'] },
+  paulgraham: { conciseness: 55, formality: 65, emotionality: 25, directness: 55, tags: ['#논증', '#사고전개'] },
+  oliverburkeman: { conciseness: 60, formality: 55, emotionality: 55, directness: 45, tags: ['#성찰', '#역설'] },
 };
 
 // ============================================================

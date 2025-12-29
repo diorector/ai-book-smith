@@ -152,7 +152,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     if (!bookStructure) return;
 
     if (writingAbortRef.current) {
-      try { writingAbortRef.current.abort(); } catch {}
+      try { writingAbortRef.current.abort('restart'); } catch {}
     }
     writingAbortRef.current = new AbortController();
     const writingSignal = writingAbortRef.current.signal;
@@ -160,6 +160,9 @@ export function useBookWriting(params: UseBookWritingParams) {
     setStep('writing');
     setIsTestMode(testMode);
     setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
+    
+    // 즉시 "준비 중" 상태 표시 (사용자가 기다리고 있음을 인지하도록)
+    setProgress({ total: 0, current: 0, status: 'preparing' });
     
     const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
     const bookSummary = await callGemini(
@@ -223,7 +226,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     if (!bookStructure) return;
 
     if (writingAbortRef.current) {
-      try { writingAbortRef.current.abort(); } catch {}
+      try { writingAbortRef.current.abort('restart'); } catch {}
     }
     writingAbortRef.current = new AbortController();
     const writingSignal = writingAbortRef.current.signal;
@@ -362,9 +365,10 @@ export function useBookWriting(params: UseBookWritingParams) {
 
   const stopWriting = useCallback(() => {
     if (writingAbortRef.current) {
-      writingAbortRef.current.abort();
+      writingAbortRef.current.abort('user-stopped');
     }
-  }, []);
+    setProgress(prev => ({ ...prev, status: 'stopped' }));
+  }, [setProgress]);
 
   return {
     startDeepWriting,

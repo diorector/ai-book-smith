@@ -35,6 +35,8 @@ interface UseProjectManagementReturn {
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   readyForOutline: boolean;
   setReadyForOutline: (ready: boolean) => void;
+  hasConfirmedStyle: boolean;
+  setHasConfirmedStyle: (confirmed: boolean) => void;
   toneSettings: ToneSettings;
   setToneSettings: (settings: ToneSettings) => void;
   customStyles: CustomStyle[];
@@ -104,6 +106,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
     { role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }
   ]);
   const [readyForOutline, setReadyForOutline] = useState(false);
+  const [hasConfirmedStyle, setHasConfirmedStyle] = useState(false);
   const [toneSettings, setToneSettings] = useState<ToneSettings>({
     role: 'mentor',
     tone: 'warm',
@@ -195,7 +198,8 @@ export function useProjectManagement(): UseProjectManagementReturn {
 
         if (parsed.step) setStep(parsed.step);
         if (parsed.messages) setMessages(parsed.messages);
-        if (parsed.readyForOutline) setReadyForOutline(parsed.readyForOutline);
+        if (typeof parsed.readyForOutline === 'boolean') setReadyForOutline(parsed.readyForOutline);
+        if (typeof parsed.hasConfirmedStyle === 'boolean') setHasConfirmedStyle(parsed.hasConfirmedStyle);
         if (parsed.toneSettings) setToneSettings(parsed.toneSettings);
         if (parsed.bookStructure) setBookStructure(parsed.bookStructure);
         if (parsed.subsectionContents) setSubsectionContents(parsed.subsectionContents);
@@ -241,6 +245,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
       step,
       messages,
       readyForOutline,
+      hasConfirmedStyle,
       toneSettings,
       bookStructure,
       subsectionContents,
@@ -278,7 +283,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(updatedProjects));
     localStorage.setItem('ai-book-smith-last-project', currentProjectId);
   }, [
-    currentProjectId, step, messages, readyForOutline, toneSettings, bookStructure,
+    currentProjectId, step, messages, readyForOutline, hasConfirmedStyle, toneSettings, bookStructure,
     subsectionContents, factClaimsBySection, factCheckMode, progress, coverImage,
     coverConcepts, coverPromptUsed, currentTheme, includeIntroOutro, isTestMode,
     writingFeedback, showFeedbackInput, feedbackChatMessages, showDetailedToc,
@@ -323,6 +328,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
     setStep('interview');
     setMessages([{ role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }]);
     setReadyForOutline(false);
+    setHasConfirmedStyle(false);
     setBookStructure(null);
     setSubsectionContents({});
     setFactClaimsBySection({});
@@ -399,6 +405,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
     setStep('interview');
     setMessages([{ role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }]);
     setReadyForOutline(false);
+    setHasConfirmedStyle(false);
     setBookStructure(null);
     setSubsectionContents({});
     setFactClaimsBySection({});
@@ -449,6 +456,8 @@ export function useProjectManagement(): UseProjectManagementReturn {
     setMessages,
     readyForOutline,
     setReadyForOutline,
+    hasConfirmedStyle,
+    setHasConfirmedStyle,
     toneSettings,
     setToneSettings,
     customStyles,

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useEffect } from 'react';
-import { Send, Layers, Loader2, User } from 'lucide-react';
+import { ArrowRight, Layers, Loader2 } from 'lucide-react';
 import type { Theme } from '@/constants/themes';
 import type { Message, CustomStyle } from '@/types/project';
 import type { ToneSettings } from '@/constants/toneFactors';
@@ -21,7 +21,7 @@ interface InterviewPanelProps {
   toneSettings: ToneSettings;
   setToneSettings: (settings: ToneSettings) => void;
   showToneSelector: boolean;
-  setShowToneSelector: (show: boolean) => void;
+  onConfirmStyle: () => void;
   customStyles: CustomStyle[];
   onAddCustomStyle: (style: CustomStyle) => void;
   onDeleteCustomStyle: (id: string) => void;
@@ -43,7 +43,7 @@ export default function InterviewPanel({
   toneSettings,
   setToneSettings,
   showToneSelector,
-  setShowToneSelector,
+  onConfirmStyle,
   customStyles,
   onAddCustomStyle,
   onDeleteCustomStyle,
@@ -58,96 +58,110 @@ export default function InterviewPanel({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // 스타일 선택 단계일 때는 ToneSelector만 보여줌
+  if (showToneSelector) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden bg-[var(--paper)] border border-[var(--stone)] rounded">
+        {/* Header */}
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-[var(--stone)]">
+          <h2 className="text-sm sm:text-base font-semibold text-[var(--ink)]">글쓰기 스타일 선택</h2>
+          <p className="text-xs text-[var(--ink-muted)] mt-0.5">어떤 톤으로 책을 쓸지 정해주세요</p>
+        </div>
+
+        {/* Tone Selector */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <ToneSelector
+            toneSettings={toneSettings}
+            setToneSettings={setToneSettings}
+            theme={theme}
+            TONE_FACTORS={TONE_FACTORS}
+            customStyles={customStyles}
+            onAddCustomStyle={onAddCustomStyle}
+            onDeleteCustomStyle={onDeleteCustomStyle}
+            selectedCustomStyleId={selectedCustomStyleId}
+            onSelectCustomStyle={onSelectCustomStyle}
+          />
+        </div>
+
+        {/* Confirm Button */}
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-[var(--stone)] bg-[var(--paper-warm)]">
+          <button 
+            onClick={onConfirmStyle} 
+            className="w-full py-3 sm:py-3.5 px-4 rounded-lg text-sm font-medium bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors"
+          >
+            <span className="hidden sm:inline">설정 완료 → </span>기획 인터뷰 시작
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 스타일 선택 완료 후 인터뷰 UI
   return (
-    <div className={`flex-1 flex flex-col overflow-hidden ${theme.card}`}>
+    <div className="flex-1 flex flex-col overflow-hidden bg-[var(--paper)] border border-[var(--stone)] rounded">
       {/* Header */}
-      <div className="p-4 flex justify-between items-center border-b border-[#D4C5A9] bg-[#EBE5CE]">
-        <h2 className="font-semibold flex items-center gap-2 text-[#4A3B32]">
-          <User size={18} className="text-[#8C6B5D]" />
-          기획 인터뷰
-        </h2>
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-[var(--stone)]">
+        <h2 className="text-sm sm:text-base font-semibold text-[var(--ink)]">기획 인터뷰</h2>
+        <p className="text-xs text-[var(--ink-muted)] mt-0.5">책의 방향성을 함께 잡아갑니다</p>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Messages - Editorial Style */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6">
         {messages.filter(m => m.role !== 'system').map((msg, idx) => (
-          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] p-3.5 rounded-2xl text-sm leading-relaxed ${
-              msg.role === 'user'
-                ? 'bg-[#8C6B5D] text-white rounded-tr-sm shadow-md'
-                : 'bg-[#F5F1E8] border border-[#D4C5A9]/50 rounded-tl-sm text-[#4A3B32]'
-            }`}>
-              <span>
-                {msg.role === 'user' ? msg.content : <MarkdownRenderer text={msg.content} theme={theme} />}
-              </span>
+          <div key={idx} className="ed-message">
+            <div className="ed-message-label">
+              {msg.role === 'user' ? '작가' : '에디터'}
+            </div>
+            <div className={`ed-message-content ${msg.role === 'user' ? 'ed-message-user' : ''}`}>
+              {msg.role === 'user' ? (
+                <span>{msg.content}</span>
+              ) : (
+                <MarkdownRenderer text={msg.content} theme={theme} />
+              )}
             </div>
           </div>
         ))}
-        {showToneSelector && (
-          <div className="animate-fade-in">
-            <ToneSelector
-              toneSettings={toneSettings}
-              setToneSettings={setToneSettings}
-              theme={theme}
-              TONE_FACTORS={TONE_FACTORS}
-              customStyles={customStyles}
-              onAddCustomStyle={onAddCustomStyle}
-              onDeleteCustomStyle={onDeleteCustomStyle}
-              selectedCustomStyleId={selectedCustomStyleId}
-              onSelectCustomStyle={onSelectCustomStyle}
-              onClose={() => setShowToneSelector(false)}
-            />
-            <button 
-              onClick={() => setShowToneSelector(false)} 
-              className={`w-full mt-4 py-3 px-4 rounded-xl font-bold text-sm shadow-lg transition-all hover:scale-[1.02] text-white ${theme.button}`}
-            >
-              설정 완료 (채팅 계속하기)
-            </button>
-          </div>
-        )}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input Area */}
-      <div className="p-3.5 border-t border-[#D4C5A9] bg-[#EBE5CE]">
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-[var(--stone)] bg-[var(--paper-warm)]">
         {readyForOutline ? (
           <div className="space-y-3">
-            <div className="flex items-center justify-between px-2 pb-1">
-              <label className="flex items-center gap-2 text-sm cursor-pointer transition-opacity hover:opacity-100 text-[#4A3B32] opacity-90">
-                <input
-                  type="checkbox"
-                  checked={includeIntroOutro}
-                  onChange={(e) => setIncludeIntroOutro(e.target.checked)}
-                  className="w-4 h-4 rounded border-[#D4C5A9] text-[#8C6B5D] focus:ring-[#8C6B5D]"
-                />
-                서문/결문 포함 (Prologue & Epilogue)
-              </label>
-            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer text-[var(--ink-light)]">
+              <input
+                type="checkbox"
+                checked={includeIntroOutro}
+                onChange={(e) => setIncludeIntroOutro(e.target.checked)}
+                className="w-4 h-4 rounded border-[var(--stone-dark)] text-[var(--accent)] focus:ring-[var(--accent)]"
+              />
+              서문/결문 포함
+            </label>
             <button
               onClick={onGenerateOutline}
               disabled={loading}
-              className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all bg-[#6B8E4E] hover:bg-[#5A7A40] text-white shadow-lg hover:shadow-xl"
+              className="w-full py-3 rounded text-sm font-medium flex items-center justify-center gap-2 bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors disabled:opacity-50"
             >
-              {loading ? <Loader2 className="animate-spin" /> : <Layers />}
-              심층 목차 생성하기
+              {loading ? <Loader2 className="animate-spin" size={16} /> : <Layers size={16} />}
+              목차 생성
             </button>
           </div>
         ) : (
-          <div className="flex gap-2.5">
+          <div className="flex gap-3">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && onSendMessage()}
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && onSendMessage()}
               disabled={loading}
               placeholder="답변을 입력하세요..."
-              className={`flex-1 px-4 py-2.5 outline-none transition-all rounded-xl border ${theme.border} ${theme.input} ${theme.text} focus:border-[#8C6B5D]`}
+              className="ed-input flex-1"
             />
             <button 
               onClick={onSendMessage} 
-              disabled={loading} 
-              className={`p-2.5 rounded-xl transition-all text-white ${theme.button}`}
+              disabled={loading || !input.trim()} 
+              className="px-4 py-2 rounded bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors disabled:opacity-50"
             >
-              <Send size={20} />
+              <ArrowRight size={18} />
             </button>
           </div>
         )}

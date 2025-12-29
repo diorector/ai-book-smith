@@ -12,7 +12,7 @@ export interface Project {
 export interface Progress {
   total: number;
   current: number;
-  status: 'idle' | 'writing' | 'stopped' | 'test-complete' | 'done';
+  status: 'idle' | 'preparing' | 'writing' | 'stopped' | 'test-complete' | 'done';
 }
 
 export interface AutoFactCheckProgress {
@@ -82,6 +82,7 @@ export interface ProjectState {
   step: string;
   messages: Message[];
   readyForOutline: boolean;
+  hasConfirmedStyle?: boolean;
   toneSettings: ToneSettings;
   bookStructure: BookStructure | null;
   subsectionContents: Record<string, string>;

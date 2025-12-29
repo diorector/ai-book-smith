@@ -47,7 +47,7 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
 
       const key = `inl-${pos}-${end}`;
       if (marker === '**' || marker === '__') {
-        out.push(<strong key={key} className="font-bold">{parseInline(inner)}</strong>);
+        out.push(<strong key={key} className="font-semibold">{parseInline(inner)}</strong>);
       } else {
         out.push(<em key={key} className="italic">{parseInline(inner)}</em>);
       }
@@ -70,17 +70,17 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
       bodyRows = bodyRows.slice(1);
     }
     elements.push(
-      <div key={`table-${elements.length}`} className={`my-8 overflow-hidden border ${theme.border} rounded-sm`}>
+      <div key={`table-${elements.length}`} className="my-6 overflow-hidden border border-[var(--stone)] rounded">
         <table className="min-w-full text-sm text-left">
-          <thead className={`bg-[#EBE5CE] ${theme.previewText} border-b-2 ${theme.border}`}>
-            <tr>{headers.map((h, i) => <th key={i} className="px-6 py-3 font-bold tracking-wider uppercase">{parseInline(h)}</th>)}</tr>
+          <thead className="bg-[var(--paper-warm)] text-[var(--ink)] border-b border-[var(--stone)]">
+            <tr>{headers.map((h, i) => <th key={i} className="px-4 py-2.5 font-medium text-xs uppercase tracking-wide">{parseInline(h)}</th>)}</tr>
           </thead>
-          <tbody className="divide-y divide-[#D4C5A9] bg-[#FAF7F0]">
+          <tbody className="divide-y divide-[var(--stone)] bg-[var(--paper)]">
             {bodyRows.map((row, rIdx) => {
               const cells = row.split('|').filter(c => c.trim() !== '').map(c => c.trim());
               return (
-                <tr key={rIdx} className={`hover:bg-[#EBE5CE]/50 transition-colors ${theme.previewText}`}>
-                  {cells.map((c, cIdx) => <td key={cIdx} className="px-6 py-4 whitespace-pre-wrap leading-relaxed">{parseInline(c)}</td>)}
+                <tr key={rIdx} className="hover:bg-[var(--paper-warm)] transition-colors">
+                  {cells.map((c, cIdx) => <td key={cIdx} className="px-4 py-3 whitespace-pre-wrap leading-relaxed text-[var(--ink-light)]">{parseInline(c)}</td>)}
                 </tr>
               );
             })}
@@ -99,8 +99,8 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
       flushTable();
       inReferences = true;
       elements.push(
-        <div key={`refs-h-${i}`} className={`mt-10 pt-6 border-t ${theme.border}`}>
-          <h2 className={`text-base font-bold tracking-wide uppercase opacity-80 ${theme.previewText}`}>{trimmedLine}</h2>
+        <div key={`refs-h-${i}`} className="mt-8 pt-4 border-t border-[var(--stone)]">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--ink-muted)]">{trimmedLine}</h2>
         </div>
       );
       continue;
@@ -113,9 +113,9 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
         const title = m[2];
         const url = m[3];
         elements.push(
-          <div key={`ref-${i}`} className={`flex items-start gap-3 py-1 text-sm ${theme.previewText}`}>
-            <span className="opacity-60 font-mono shrink-0">[{n}]</span>
-            <a href={url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80 break-words">
+          <div key={`ref-${i}`} className="flex items-start gap-2 py-1 text-sm text-[var(--ink-muted)]">
+            <span className="font-mono text-xs shrink-0">[{n}]</span>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-[var(--ink)] transition-colors break-words">
               {title || url}
             </a>
           </div>
@@ -142,13 +142,13 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
       const level = headerMatch[1].length;
       const content = headerMatch[2];
       if (level === 1) {
-        elements.push(<h1 key={i} className={`text-2xl font-bold mt-10 mb-6 ${theme.previewText} border-b-2 pb-2 ${theme.border}`}>{parseInline(content)}</h1>);
+        elements.push(<h1 key={i} className="text-2xl font-semibold mt-8 mb-4 text-[var(--ink)] border-b border-[var(--stone)] pb-2 font-display">{parseInline(content)}</h1>);
       } else if (level === 2) {
-        elements.push(<h2 key={i} className={`text-xl font-bold mt-8 mb-4 ${theme.previewText} border-b pb-1 ${theme.border}`}>{parseInline(content)}</h2>);
+        elements.push(<h2 key={i} className="text-xl font-semibold mt-6 mb-3 text-[var(--ink)] font-display">{parseInline(content)}</h2>);
       } else if (level === 3) {
-        elements.push(<h3 key={i} className={`text-lg font-bold mt-6 mb-2 ${theme.previewText} flex items-center gap-2`}><span className="opacity-40 text-xl select-none text-[#8C6B5D]">§</span>{parseInline(content)}</h3>);
+        elements.push(<h3 key={i} className="text-lg font-medium mt-5 mb-2 text-[var(--ink)] flex items-center gap-2 font-display"><span className="text-[var(--ink-faint)]">§</span>{parseInline(content)}</h3>);
       } else {
-        elements.push(<h4 key={i} className={`text-base font-bold mt-4 mb-2 ${theme.previewText} opacity-90`}>{parseInline(content)}</h4>);
+        elements.push(<h4 key={i} className="text-base font-medium mt-4 mb-2 text-[var(--ink)]">{parseInline(content)}</h4>);
       }
       continue;
     }
@@ -156,9 +156,9 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
     if (trimmedLine.match(/^[-*]\s/)) {
       const content = cleanLine.replace(/^[-*]\s/, '');
       elements.push(
-        <div key={i} className="flex items-start gap-3 ml-1 mb-2 pl-2">
-          <span className={`mt-2 text-[6px] shrink-0 opacity-60 ${theme.previewText}`}>●</span>
-          <p className={`flex-1 ${theme.previewText} leading-relaxed`}>{parseInline(content)}</p>
+        <div key={i} className="flex items-start gap-3 ml-1 mb-1.5 pl-2">
+          <span className="mt-2.5 w-1 h-1 rounded-full bg-[var(--ink-faint)] shrink-0" />
+          <p className="flex-1 text-[var(--ink-light)] leading-relaxed">{parseInline(content)}</p>
         </div>
       );
       continue;
@@ -168,8 +168,8 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
     if (orderedListMatch) {
       elements.push(
         <div key={i} className="flex items-start gap-2 ml-1 mb-1 pl-2">
-          <span className={`font-bold text-sm mt-1 shrink-0 ${theme.previewText}`}>{orderedListMatch[1]}.</span>
-          <p className={`flex-1 ${theme.previewText} leading-relaxed`}>{parseInline(orderedListMatch[2])}</p>
+          <span className="text-sm font-medium mt-0.5 shrink-0 text-[var(--ink-muted)]">{orderedListMatch[1]}.</span>
+          <p className="flex-1 text-[var(--ink-light)] leading-relaxed">{parseInline(orderedListMatch[2])}</p>
         </div>
       );
       continue;
@@ -177,15 +177,15 @@ export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps)
     
     if (trimmedLine.startsWith('> ')) {
       elements.push(
-        <blockquote key={i} className={`my-6 pl-6 border-l-4 border-[#8C6B5D] italic opacity-80 py-2 pr-2 rounded-r ${theme.previewText}`}>
+        <blockquote key={i} className="my-4 pl-4 border-l-2 border-[var(--stone-dark)] italic text-[var(--ink-muted)] py-1">
           {parseInline(cleanLine.replace(/^>\s?/, ''))}
         </blockquote>
       );
       continue;
     }
     
-    if (trimmedLine === '') { elements.push(<div key={i} className="h-4" />); continue; }
-    elements.push(<p key={i} className={`mb-4 text-[17px] leading-[1.95] ${theme.previewText}`}>{parseInline(cleanLine)}</p>);
+    if (trimmedLine === '') { elements.push(<div key={i} className="h-3" />); continue; }
+    elements.push(<p key={i} className="mb-3 text-[15px] leading-[1.8] text-[var(--ink-light)]">{parseInline(cleanLine)}</p>);
   }
   
   flushTable();

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Wand2, Sparkles } from 'lucide-react';
+import { Loader2, Wand2 } from 'lucide-react';
 
 // Constants
 import { THEMES, SYSTEM_PROMPTS, TONE_FACTORS } from '@/constants';
@@ -18,11 +18,13 @@ import { loadScript } from '@/utils/helpers';
 
 // Components
 import Header from '@/components/Header';
+import Sidebar from '@/components/Sidebar';
 import { InterviewPanel, OutlinePanel, WritingProgressPanel, PreviewPanel } from '@/components/panels';
 import { CoverConceptsModal, FeedbackChatModal } from '@/components/modals';
 
 // Types
 import type { CoverConcept, CustomStyle } from '@/types/project';
+
 
 export default function BookSmithAI() {
   // Project management hook
@@ -33,6 +35,7 @@ export default function BookSmithAI() {
     startEditingProject, saveProjectName, cancelEditingProject, setEditingProjectName,
     updateProjectName, handleReset,
     step, setStep, messages, setMessages, readyForOutline, setReadyForOutline,
+    hasConfirmedStyle, setHasConfirmedStyle,
     toneSettings, setToneSettings, customStyles, setCustomStyles,
     selectedCustomStyleId, setSelectedCustomStyleId, bookStructure, setBookStructure,
     subsectionContents, setSubsectionContents, factClaimsBySection, setFactClaimsBySection,
@@ -52,8 +55,7 @@ export default function BookSmithAI() {
   // Local UI state
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [showToneSelector, setShowToneSelector] = useState(true);
-  const [isToneModalOpen, setIsToneModalOpen] = useState(false);
+  const showToneSelector = step === 'interview' && !hasConfirmedStyle;
   const [input, setInput] = useState('');
   const [generatingCover, setGeneratingCover] = useState(false);
   const [generatingCoverOptionId, setGeneratingCoverOptionId] = useState<number | null>(null);
@@ -68,6 +70,7 @@ export default function BookSmithAI() {
   const [modifyingNode, setModifyingNode] = useState<{ type: 'chapter' | 'subsection'; cIdx: number; sIdx?: number } | null>(null);
   const [modificationInput, setModificationInput] = useState('');
   const [highlightedSectionKey, setHighlightedSectionKey] = useState<string | null>(null);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   
   // 팩트체크(교열) 상태
   const [factCheckStatus, setFactCheckStatus] = useState<{
@@ -92,8 +95,8 @@ export default function BookSmithAI() {
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Theme
-  const theme = THEMES[currentTheme];
+  // Theme - always use editorial
+  const theme = THEMES.editorial;
 
   // Book writing hook
   const bookWriting = useBookWriting({
@@ -233,7 +236,6 @@ export default function BookSmithAI() {
     }
     
     try {
-      // 선택된 커스텀 스타일 찾기
       const selectedCustomStyle = selectedCustomStyleId 
         ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
         : null;
@@ -283,9 +285,9 @@ export default function BookSmithAI() {
         
         if (cleanName) {
           updateProjectName(cleanName);
-                }
-              }
-            } catch (e) {
+        }
+      }
+    } catch (e) {
       console.error("프로젝트 이름 추출 실패:", e);
     }
   };
@@ -296,43 +298,58 @@ export default function BookSmithAI() {
     try {
       const historyText = messages.map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`).join('\n');
       const response = await callGemini(
-        `인터뷰 내용을 바탕으로 **2단계 계층 구조(Chapter -> Subsection)**를 가진 목차 JSON을 생성하세요.
-         ${includeIntroOutro ? "반드시 책의 맨 앞에는 '서문(Prologue)'을, 맨 뒤에는 '결문(Epilogue)'을 별도 챕터로 포함시키세요." : ""} 
-         
-중요: 반드시 유효한 JSON만 출력하세요. 마크다운 코드 블록이나 설명 없이 JSON 객체만 반환하세요.
-         
+        `인터뷰 내용을 바탕으로 2단계(Chapter -> Subsection) 목차 JSON을 생성하세요.
+${includeIntroOutro ? "반드시 책의 맨 앞에는 '서문(Prologue)'을, 맨 뒤에는 '결문(Epilogue)'을 별도 챕터로 포함시키세요." : ""} 
+
+출력 규칙: 오직 JSON 객체만. 코드블록/설명/마크다운 금지.
+
 ${historyText}`,
         SYSTEM_PROMPTS.architect
       );
       
-      // 1단계: 마크다운 코드 블록에서 JSON 추출 시도
-      let jsonStr = response;
-      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        jsonStr = codeBlockMatch[1].trim();
-      }
-      
-      // 2단계: JSON 객체 패턴 매칭
-      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        console.error("JSON 매칭 실패. 원본 응답:", response);
+      const extractFirstJsonObject = (src: string): string | null => {
+        if (!src) return null;
+        // 코드블록 우선 제거
+        const codeBlockMatch = src.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const text = (codeBlockMatch ? codeBlockMatch[1] : src).trim();
+
+        // 균형 괄호 기반으로 첫 JSON 객체를 찾는다 (문자열/이스케이프 고려)
+        let inString = false;
+        let escape = false;
+        let depth = 0;
+        let start = -1;
+
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          if (escape) { escape = false; continue; }
+          if (ch === '\\\\') { if (inString) escape = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '{') {
+            if (depth === 0) start = i;
+            depth++;
+          } else if (ch === '}') {
+            depth--;
+            if (depth === 0 && start !== -1) {
+              return text.slice(start, i + 1);
+            }
+          }
+        }
+        return null;
+      };
+
+      let jsonStr = extractFirstJsonObject(response);
+      if (!jsonStr) {
+        console.error("JSON 추출 실패. 원본 응답:", response);
         throw new Error("응답에서 JSON 객체를 찾을 수 없습니다. 다시 시도해 주세요.");
       }
-      
-      jsonStr = jsonMatch[0];
       let parsed;
       
-      // 3단계: 여러 가지 정제 방법 시도
       const cleaningStrategies = [
-        // 전략 1: 그대로 파싱
         (s: string) => s,
-        // 전략 2: trailing comma 제거
         (s: string) => s.replace(/,(\s*[\]}])/g, '$1'),
-        // 전략 3: 줄바꿈/탭 정규화 + trailing comma 제거
         (s: string) => s.replace(/\r?\n/g, ' ').replace(/\t/g, ' ').replace(/,(\s*[\]}])/g, '$1'),
-        // 전략 4: 컨트롤 문자 제거
         (s: string) => s.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/,(\s*[\]}])/g, '$1'),
-        // 전략 5: 이스케이프되지 않은 따옴표 처리
         (s: string) => s.replace(/[\x00-\x1F\x7F]/g, ' ')
           .replace(/,(\s*[\]}])/g, '$1')
           .replace(/:\s*"([^"]*)"([^,}\]]*)"([^"]*?)"/g, ': "$1\\"$2\\"$3"'),
@@ -345,7 +362,7 @@ ${historyText}`,
           break;
         } catch (e) {
           if (i === cleaningStrategies.length - 1) {
-            console.error("모든 JSON 파싱 전략 실패. 정제된 문자열:", jsonStr.substring(0, 500));
+            console.error("모든 JSON 파싱 전략 실패. 정제된 문자열:", jsonStr.substring(0, 1500));
             throw new Error("AI 응답의 JSON 형식이 올바르지 않습니다. 다시 시도해 주세요.");
           }
         }
@@ -353,6 +370,20 @@ ${historyText}`,
       
       if (!parsed || !parsed.chapters) {
         throw new Error("목차 구조가 올바르지 않습니다. chapters 배열이 없습니다.");
+      }
+
+      // 최소 보정: 번호 누락/타입 불일치 정리
+      if (Array.isArray(parsed.chapters)) {
+        parsed.chapters = parsed.chapters.map((c: any, idx: number) => ({
+          ...c,
+          chapter_number: typeof c.chapter_number === 'number' ? c.chapter_number : idx + 1,
+          subsections: Array.isArray(c.subsections)
+            ? c.subsections.map((s: any, sIdx: number) => ({
+                ...s,
+                sub_number: typeof s.sub_number === 'number' ? s.sub_number : sIdx + 1,
+              }))
+            : [],
+        }));
       }
         
       setBookStructure(parsed);
@@ -364,7 +395,7 @@ ${historyText}`,
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error("목차 생성 오류:", error);
-      alert("목차 생성 실패: " + errorMessage + "\n\n다시 시도해 주세요.");
+      alert("목차 생성 실패: " + errorMessage + "\n\n다시 시도해 주세요.\n(팁: 답변을 조금 더 구체적으로 적으면 JSON 품질이 좋아집니다.)");
     } finally {
       setLoading(false);
     }
@@ -436,7 +467,6 @@ ${historyText}`,
       );
       setCoverConcepts(data);
       setIsCoverModalOpen(true);
-      // 자동 생성 제거 - 유저가 직접 선택하도록 변경
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : 'Unknown error';
       alert("표지 컨셉 생성 실패: " + errorMessage);
@@ -466,21 +496,20 @@ ${historyText}`,
       setCoverPromptUsed(option.promptEnglish);
       setIsCoverModalOpen(false);
 
-      // Save immediately
       saveProjectState();
     } catch (e: unknown) {
       let errorMessage = "알 수 없는 오류가 발생했습니다.";
       
       if (e instanceof Error) {
-      if (e.name === 'AbortError' || e.message?.includes('aborted')) {
-        errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
+        if (e.name === 'AbortError' || e.message?.includes('aborted')) {
+          errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
         } else {
-        errorMessage = e.message;
+          errorMessage = e.message;
         }
       }
       
       console.error("이미지 생성 오류:", e);
-          alert(`이미지 생성 실패\n\n${errorMessage}\n\n브라우저 콘솔을 확인해주세요.`);
+      alert(`이미지 생성 실패\n\n${errorMessage}`);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       setGeneratingCover(false);
@@ -499,7 +528,6 @@ ${historyText}`,
     setFeedbackChatMessages(next);
 
     try {
-      // 선택된 커스텀 스타일 찾기
       const selectedCustomStyle = selectedCustomStyleId 
         ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
         : null;
@@ -637,9 +665,6 @@ ${historyText}`,
     }
 
     setFactCheckStatus({ status: 'checking', current: 0, total: keys.length, changes: 0, changesList: [] });
-    
-    // useBookWriting의 autoFactCheck과 동일한 로직
-    // 하지만 여기서는 수동으로 호출
   };
 
   const handleExportEPUB = async () => {
@@ -797,78 +822,14 @@ ${historyText}`,
 
   const canShowDetailedToc = !!bookStructure && (progress.status === 'done' || progress.status === 'test-complete' || step === 'done');
 
+  const currentProject = projects.find(p => p.id === currentProjectId);
+  
   return (
-    <div className={`min-h-screen font-ui flex flex-col transition-colors duration-500 ${theme.text}`}>
-      {/* Background */}
-      <div className={`fixed inset-0 -z-50 ${theme.bg}`} />
-      <style>{`@media print { body * { visibility: hidden; } #printable-area, #printable-area * { visibility: visible; } #printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 2cm; } header, .sidebar-panel { display: none !important; } @page { margin: 2cm; size: auto; } }`}</style>
-
-      {/* Modals */}
-      <CoverConceptsModal
-        isOpen={isCoverModalOpen}
-        onClose={() => setIsCoverModalOpen(false)}
-        theme={theme}
-        coverConcepts={coverConcepts}
-        generatingCover={generatingCover}
-        generatingCoverOptionId={generatingCoverOptionId}
-        onGenerateCover={handleGenerateCoverImage}
-      />
-
-      <FeedbackChatModal
-        isOpen={isFeedbackChatOpen}
-        onClose={() => setIsFeedbackChatOpen(false)}
-        theme={theme}
-        messages={feedbackChatMessages}
-        input={feedbackChatInput}
-        setInput={setFeedbackChatInput}
-        isLoading={isFeedbackChatLoading}
-        onSend={sendFeedbackChat}
-        onFinalize={finalizeFeedbackFromChat}
-      />
-
-      {/* Modification Modal */}
-      {modifyingNode && bookStructure && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${theme.card}`}>
-            <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-[#4A3B32]">
-              <Wand2 className="text-[#8C6B5D]" size={20} /> 
-              AI 구조 변경
-            </h3>
-            <p className="text-sm mb-3 text-[#8C6B5D]/70">
-              {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
-            </p>
-            <textarea
-              value={modificationInput}
-              onChange={(e) => setModificationInput(e.target.value)}
-              className={`w-full h-28 p-3 text-sm mb-4 outline-none transition-all rounded-xl border ${theme.border} ${theme.input} ${theme.text}`}
-              placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
-            />
-            <div className="flex justify-end gap-2.5">
-              <button 
-                onClick={() => setModifyingNode(null)} 
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors hover:bg-[#D4C5A9]/50 text-[#4A3B32]"
-              >
-                취소
-              </button>
-              <button 
-                onClick={submitModification} 
-                disabled={loading} 
-                className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all text-white ${theme.button}`}
-              >
-                {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Header */}
-      <Header
-        theme={theme}
+    <div className="min-h-screen flex bg-[var(--paper)] text-[var(--ink)]">
+      {/* Sidebar - Hidden on mobile, shown on md+ */}
+      <Sidebar
         projects={projects}
         currentProjectId={currentProjectId}
-        showProjectSelector={showProjectSelector}
-        setShowProjectSelector={setShowProjectSelector}
         editingProjectId={editingProjectId}
         editingProjectName={editingProjectName}
         setEditingProjectName={setEditingProjectName}
@@ -878,37 +839,91 @@ ${historyText}`,
         startEditingProject={startEditingProject}
         saveProjectName={saveProjectName}
         cancelEditingProject={cancelEditingProject}
-        handleReset={handleReset}
+        isMobileOpen={isMobileSidebarOpen}
+        onMobileClose={() => setIsMobileSidebarOpen(false)}
       />
+      
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Modals */}
+        <CoverConceptsModal
+          isOpen={isCoverModalOpen}
+          onClose={() => setIsCoverModalOpen(false)}
+          theme={theme}
+          coverConcepts={coverConcepts}
+          generatingCover={generatingCover}
+          generatingCoverOptionId={generatingCoverOptionId}
+          onGenerateCover={handleGenerateCoverImage}
+        />
 
-      <main className="flex-1 p-4 pb-10 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-500 items-start">
+        <FeedbackChatModal
+          isOpen={isFeedbackChatOpen}
+          onClose={() => setIsFeedbackChatOpen(false)}
+          theme={theme}
+          messages={feedbackChatMessages}
+          input={feedbackChatInput}
+          setInput={setFeedbackChatInput}
+          isLoading={isFeedbackChatLoading}
+          onSend={sendFeedbackChat}
+          onFinalize={finalizeFeedbackFromChat}
+        />
+
+        {/* Modification Modal */}
+        {modifyingNode && bookStructure && (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+            <div className="w-full max-w-md p-6 bg-[var(--paper)] border border-[var(--stone)] rounded shadow-lg">
+              <h3 className="font-semibold text-base mb-4 flex items-center gap-2 text-[var(--ink)]">
+                <Wand2 size={18} className="text-[var(--ink-muted)]" />
+                AI 구조 변경
+              </h3>
+              <p className="text-sm mb-3 text-[var(--ink-muted)]">
+                {modifyingNode.type === 'chapter' ? '챕터' : '섹션'}를 어떻게 바꿀까요?
+              </p>
+              <textarea
+                value={modificationInput}
+                onChange={(e) => setModificationInput(e.target.value)}
+                className="w-full h-24 p-3 text-sm mb-4 outline-none border border-[var(--stone-dark)] rounded bg-[var(--paper)] focus:border-[var(--ink-muted)]"
+                placeholder="예: '더 실용적인 관점으로' 또는 '제목을 더 명확하게'"
+              />
+              <div className="flex justify-end gap-2">
+                <button 
+                  onClick={() => setModifyingNode(null)} 
+                  className="px-4 py-2 rounded text-sm font-medium text-[var(--ink-muted)] hover:text-[var(--ink)] hover:bg-[var(--stone)] transition-colors"
+                >
+                  취소
+                </button>
+                <button 
+                  onClick={submitModification} 
+                  disabled={loading} 
+                  className="px-4 py-2 rounded text-sm font-medium bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {loading ? <Loader2 className="animate-spin" size={14} /> : null}
+                  적용
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Header */}
+        <Header
+          projectName={currentProject?.name}
+          step={step}
+          handleReset={handleReset}
+          onMenuClick={() => setIsMobileSidebarOpen(true)}
+        />
+
+      {/* Main Content */}
+      <main className="flex-1 px-3 sm:px-4 md:px-6 py-4 sm:py-6 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
         {/* Left Panel */}
         <div
           ref={leftPanelRef}
-          className={`sidebar-panel flex flex-col min-h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
-            ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
-            : 'lg:col-span-4'
+          className={`sidebar-panel flex flex-col min-h-[calc(100vh-120px)] gap-5 ${
+            step === 'interview'
+              ? 'lg:col-span-12 max-w-2xl mx-auto w-full'
+              : 'lg:col-span-4'
           } ${step === 'done' ? 'hidden lg:flex' : ''}`}
         >
-          {/* Step indicator */}
-          <div className={`flex items-center gap-1 p-1.5 rounded-xl text-xs ${theme.cardFlat}`}>
-            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
-              step === 'interview' 
-                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
-                : 'text-[#8C6B5D]/40'
-            }`}>1. 기획</div>
-            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
-              step === 'outline' 
-                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
-                : 'text-[#8C6B5D]/40'
-            }`}>2. 구조</div>
-            <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
-              (step === 'writing' || step === 'done') 
-                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
-                : 'text-[#8C6B5D]/40'
-            }`}>3. 집필</div>
-          </div>
-
           {step === 'interview' && (
             <InterviewPanel
               theme={theme}
@@ -922,7 +937,7 @@ ${historyText}`,
               toneSettings={toneSettings}
               setToneSettings={setToneSettings}
               showToneSelector={showToneSelector}
-              setShowToneSelector={setShowToneSelector}
+              onConfirmStyle={() => setHasConfirmedStyle(true)}
               customStyles={customStyles}
               onAddCustomStyle={(style) => setCustomStyles((prev: CustomStyle[]) => [...prev, style])}
               onDeleteCustomStyle={(id) => setCustomStyles((prev: CustomStyle[]) => prev.filter((s: CustomStyle) => s.id !== id))}
@@ -975,10 +990,10 @@ ${historyText}`,
               onResetWriting={resetWritingKeepOutline}
               onContinueWithFeedback={bookWriting.continueWritingWithFeedback}
               onFinishWithoutFeedback={() => {
-                        setShowFeedbackInput(false);
-                        setProgress(prev => ({ ...prev, status: 'done' }));
-                        setStep('done');
-                      }}
+                setShowFeedbackInput(false);
+                setProgress(prev => ({ ...prev, status: 'done' }));
+                setStep('done');
+              }}
               onOpenFeedbackChat={() => setIsFeedbackChatOpen(true)}
               onResetFeedbackChat={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
               onGenerateCoverConcepts={handleGenerateCoverConcepts}
@@ -991,7 +1006,7 @@ ${historyText}`,
               setShowRecoveryBanner={setShowRecoveryBanner}
             />
           )}
-                      </div>
+        </div>
 
         {/* Right Panel: Preview */}
         <PreviewPanel
@@ -1010,8 +1025,8 @@ ${historyText}`,
           onPrintPDF={handlePrintPDF}
           highlightedSectionKey={highlightedSectionKey}
         />
-
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
