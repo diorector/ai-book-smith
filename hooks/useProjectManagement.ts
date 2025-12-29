@@ -124,7 +124,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [coverConcepts, setCoverConcepts] = useState<CoverConcepts | null>(null);
   const [coverPromptUsed, setCoverPromptUsed] = useState('');
-  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('coffee');
+  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('editorial');
   const [includeIntroOutro, setIncludeIntroOutro] = useState(false);
   const [isTestMode, setIsTestMode] = useState(true);
   const [writingFeedback, setWritingFeedback] = useState('');
@@ -217,7 +217,10 @@ export function useProjectManagement(): UseProjectManagementReturn {
         if (parsed.coverImage) setCoverImage(parsed.coverImage);
         if (parsed.coverConcepts) setCoverConcepts(parsed.coverConcepts);
         if (parsed.coverPromptUsed) setCoverPromptUsed(parsed.coverPromptUsed);
-        if (parsed.currentTheme) setCurrentTheme(parsed.currentTheme);
+        if (parsed.currentTheme) {
+          // Backward-compat: old deployments stored "coffee"
+          setCurrentTheme(parsed.currentTheme === 'coffee' ? 'editorial' : parsed.currentTheme);
+        }
         if (parsed.includeIntroOutro !== undefined) setIncludeIntroOutro(parsed.includeIntroOutro);
         if (parsed.isTestMode !== undefined) setIsTestMode(parsed.isTestMode);
         if (parsed.writingFeedback) setWritingFeedback(parsed.writingFeedback);
