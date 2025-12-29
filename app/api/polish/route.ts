@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
         }
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-exp" });
 
         const systemPrompt = `
     당신은 전문 서적 편집자이자 윤문 전문가입니다.

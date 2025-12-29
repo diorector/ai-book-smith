@@ -3,7 +3,7 @@
 import React, { useRef, useEffect } from 'react';
 import { Send, Layers, Loader2, User } from 'lucide-react';
 import type { Theme } from '@/constants/themes';
-import type { Message } from '@/types/project';
+import type { Message, CustomStyle } from '@/types/project';
 import type { ToneSettings } from '@/constants/toneFactors';
 import { TONE_FACTORS } from '@/constants/toneFactors';
 import ToneSelector from '../ToneSelector';
@@ -11,7 +11,6 @@ import MarkdownRenderer from '../MarkdownRenderer';
 
 interface InterviewPanelProps {
   theme: Theme;
-  currentTheme: string;
   messages: Message[];
   input: string;
   setInput: (input: string) => void;
@@ -23,13 +22,17 @@ interface InterviewPanelProps {
   setToneSettings: (settings: ToneSettings) => void;
   showToneSelector: boolean;
   setShowToneSelector: (show: boolean) => void;
+  customStyles: CustomStyle[];
+  onAddCustomStyle: (style: CustomStyle) => void;
+  onDeleteCustomStyle: (id: string) => void;
+  selectedCustomStyleId: string | null;
+  onSelectCustomStyle: (id: string | null) => void;
   onSendMessage: () => void;
   onGenerateOutline: () => void;
 }
 
 export default function InterviewPanel({
   theme,
-  currentTheme,
   messages,
   input,
   setInput,
@@ -41,30 +44,26 @@ export default function InterviewPanel({
   setToneSettings,
   showToneSelector,
   setShowToneSelector,
+  customStyles,
+  onAddCustomStyle,
+  onDeleteCustomStyle,
+  selectedCustomStyleId,
+  onSelectCustomStyle,
   onSendMessage,
   onGenerateOutline,
 }: InterviewPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const isStudyTheme = currentTheme === 'study';
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   return (
-    <div className={`flex-1 flex flex-col overflow-hidden ${
-      isStudyTheme 
-        ? 'crystal-card' 
-        : `rounded-xl border shadow-xl ${theme.panel} ${theme.border}`
-    }`}>
+    <div className={`flex-1 flex flex-col overflow-hidden ${theme.card}`}>
       {/* Header */}
-      <div className={`p-4 flex justify-between items-center ${
-        isStudyTheme 
-          ? 'border-b border-[var(--glass-border)] bg-[var(--glass-warm)]' 
-          : `border-b ${theme.border} bg-black/5`
-      }`}>
-        <h2 className={`font-semibold flex items-center gap-2 ${isStudyTheme ? 'text-ink-deep' : ''}`}>
-          <User size={18} className={isStudyTheme ? 'text-antique-gold' : theme.accent} />
+      <div className="p-4 flex justify-between items-center border-b border-[#D4C5A9] bg-[#EBE5CE]">
+        <h2 className="font-semibold flex items-center gap-2 text-[#4A3B32]">
+          <User size={18} className="text-[#8C6B5D]" />
           기획 인터뷰
         </h2>
       </div>
@@ -75,19 +74,11 @@ export default function InterviewPanel({
           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[85%] p-3.5 rounded-2xl text-sm leading-relaxed ${
               msg.role === 'user'
-                ? isStudyTheme
-                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white rounded-tr-sm shadow-md'
-                  : `${theme.button} text-white rounded-tr-none`
-                : isStudyTheme
-                  ? 'crystal-card-flat rounded-tl-sm text-ink-medium'
-                  : currentTheme === 'midnight' 
-                    ? 'bg-slate-800 text-slate-100 border border-slate-700 rounded-tl-none' 
-                    : currentTheme === 'deepSpace'
-                      ? 'bg-gray-900 text-gray-200 border border-gray-800 rounded-tl-none'
-                      : `${theme.panel} ${theme.text} border ${theme.border} rounded-tl-none`
+                ? 'bg-[#8C6B5D] text-white rounded-tr-sm shadow-md'
+                : 'bg-[#F5F1E8] border border-[#D4C5A9]/50 rounded-tl-sm text-[#4A3B32]'
             }`}>
-              <span className={currentTheme === 'midnight' ? 'text-slate-100' : currentTheme === 'deepSpace' ? 'text-gray-200' : ''}>
-                {msg.role === 'user' ? msg.content : <MarkdownRenderer text={msg.content} theme={theme} currentTheme={currentTheme} />}
+              <span>
+                {msg.role === 'user' ? msg.content : <MarkdownRenderer text={msg.content} theme={theme} />}
               </span>
             </div>
           </div>
@@ -99,13 +90,16 @@ export default function InterviewPanel({
               setToneSettings={setToneSettings}
               theme={theme}
               TONE_FACTORS={TONE_FACTORS}
+              customStyles={customStyles}
+              onAddCustomStyle={onAddCustomStyle}
+              onDeleteCustomStyle={onDeleteCustomStyle}
+              selectedCustomStyleId={selectedCustomStyleId}
+              onSelectCustomStyle={onSelectCustomStyle}
               onClose={() => setShowToneSelector(false)}
             />
             <button 
               onClick={() => setShowToneSelector(false)} 
-              className={`w-full mt-4 py-3 px-4 rounded-xl font-bold text-sm shadow-lg transition-all hover:scale-[1.02] ${
-                isStudyTheme ? 'crystal-btn-primary' : `${theme.button} text-white`
-              }`}
+              className={`w-full mt-4 py-3 px-4 rounded-xl font-bold text-sm shadow-lg transition-all hover:scale-[1.02] text-white ${theme.button}`}
             >
               설정 완료 (채팅 계속하기)
             </button>
@@ -115,26 +109,16 @@ export default function InterviewPanel({
       </div>
 
       {/* Input Area */}
-      <div className={`p-3.5 ${
-        isStudyTheme 
-          ? 'border-t border-[var(--glass-border)] bg-[var(--glass-warm)]' 
-          : `border-t ${theme.border} ${theme.bg}`
-      }`}>
+      <div className="p-3.5 border-t border-[#D4C5A9] bg-[#EBE5CE]">
         {readyForOutline ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between px-2 pb-1">
-              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-opacity hover:opacity-100 ${
-                isStudyTheme ? 'text-ink-medium opacity-90' : 'opacity-80'
-              }`}>
+              <label className="flex items-center gap-2 text-sm cursor-pointer transition-opacity hover:opacity-100 text-[#4A3B32] opacity-90">
                 <input
                   type="checkbox"
                   checked={includeIntroOutro}
                   onChange={(e) => setIncludeIntroOutro(e.target.checked)}
-                  className={`w-4 h-4 rounded ${
-                    isStudyTheme 
-                      ? 'border-[var(--glass-border-strong)] text-[var(--antique-gold)] focus:ring-[var(--antique-gold)]' 
-                      : 'border-gray-300 text-indigo-600 focus:ring-indigo-500'
-                  }`}
+                  className="w-4 h-4 rounded border-[#D4C5A9] text-[#8C6B5D] focus:ring-[#8C6B5D]"
                 />
                 서문/결문 포함 (Prologue & Epilogue)
               </label>
@@ -142,11 +126,7 @@ export default function InterviewPanel({
             <button
               onClick={onGenerateOutline}
               disabled={loading}
-              className={`w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
-                isStudyTheme 
-                  ? 'bg-gradient-to-r from-[var(--forest-green)] to-[var(--forest-green-soft)] text-white shadow-lg hover:shadow-xl' 
-                  : 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
-              }`}
+              className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all bg-[#6B8E4E] hover:bg-[#5A7A40] text-white shadow-lg hover:shadow-xl"
             >
               {loading ? <Loader2 className="animate-spin" /> : <Layers />}
               심층 목차 생성하기
@@ -160,20 +140,12 @@ export default function InterviewPanel({
               onKeyDown={(e) => e.key === 'Enter' && onSendMessage()}
               disabled={loading}
               placeholder="답변을 입력하세요..."
-              className={`flex-1 px-4 py-2.5 outline-none transition-all ${
-                isStudyTheme 
-                  ? 'crystal-input rounded-xl' 
-                  : `border rounded-lg focus:border-indigo-500 ${theme.input} ${theme.border} ${theme.text}`
-              }`}
+              className={`flex-1 px-4 py-2.5 outline-none transition-all rounded-xl border ${theme.border} ${theme.input} ${theme.text} focus:border-[#8C6B5D]`}
             />
             <button 
               onClick={onSendMessage} 
               disabled={loading} 
-              className={`p-2.5 rounded-xl transition-all ${
-                isStudyTheme 
-                  ? 'crystal-btn-primary' 
-                  : `text-white ${theme.button}`
-              }`}
+              className={`p-2.5 rounded-xl transition-all text-white ${theme.button}`}
             >
               <Send size={20} />
             </button>
@@ -183,4 +155,3 @@ export default function InterviewPanel({
     </div>
   );
 }
-

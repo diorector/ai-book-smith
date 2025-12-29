@@ -8,7 +8,7 @@ import { sanitizeManuscript } from '@/utils/manuscript';
 import { getTonePrompt } from '@/utils/tonePrompt';
 import type { BookStructure, Chapter, Subsection } from '@/types/book';
 import type { ToneSettings } from '@/constants/toneFactors';
-import type { Progress } from '@/types/project';
+import type { Progress, CustomStyle } from '@/types/project';
 
 interface WritingTask {
   chapter: Chapter;
@@ -20,6 +20,8 @@ interface WritingTask {
 interface UseBookWritingParams {
   bookStructure: BookStructure | null;
   toneSettings: ToneSettings;
+  customStyles: CustomStyle[];
+  selectedCustomStyleId: string | null;
   subsectionContents: Record<string, string>;
   setSubsectionContents: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setProgress: React.Dispatch<React.SetStateAction<Progress>>;
@@ -34,6 +36,8 @@ export function useBookWriting(params: UseBookWritingParams) {
   const {
     bookStructure,
     toneSettings,
+    customStyles,
+    selectedCustomStyleId,
     subsectionContents,
     setSubsectionContents,
     setProgress,
@@ -43,6 +47,11 @@ export function useBookWriting(params: UseBookWritingParams) {
     setFactCheckStatus,
     writingFeedback,
   } = params;
+
+  // 선택된 커스텀 스타일 찾기
+  const selectedCustomStyle = selectedCustomStyleId 
+    ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
+    : null;
 
   const { callGemini, factCheck, proofread } = useAPI();
   const writingAbortRef = useRef<AbortController | null>(null);
@@ -152,7 +161,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     setIsTestMode(testMode);
     setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
     
-    const tonePrompt = getTonePrompt(toneSettings);
+    const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
     const bookSummary = await callGemini(
       `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`,
       "",
@@ -223,7 +232,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     setProgress((prev) => ({ ...prev, status: 'writing' }));
     setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
 
-    const tonePrompt = getTonePrompt(toneSettings);
+    const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
     const bookSummary = await callGemini(
       `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`,
       "",
@@ -298,7 +307,7 @@ export function useBookWriting(params: UseBookWritingParams) {
     setProgress(prev => ({ ...prev, status: 'writing' }));
     setFactCheckStatus({ status: 'idle', current: 0, total: 0, changes: 0, changesList: [] });
     
-    const tonePrompt = getTonePrompt(toneSettings);
+    const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
     const bookSummary = await callGemini(
       `다음 책 구조의 전체 핵심 내용을 500자로 요약하세요:\n${JSON.stringify(bookStructure)}`
     );

@@ -22,7 +22,7 @@ import { InterviewPanel, OutlinePanel, WritingProgressPanel, PreviewPanel } from
 import { CoverConceptsModal, FeedbackChatModal } from '@/components/modals';
 
 // Types
-import type { CoverConcept } from '@/types/project';
+import type { CoverConcept, CustomStyle } from '@/types/project';
 
 export default function BookSmithAI() {
   // Project management hook
@@ -33,7 +33,8 @@ export default function BookSmithAI() {
     startEditingProject, saveProjectName, cancelEditingProject, setEditingProjectName,
     updateProjectName, handleReset,
     step, setStep, messages, setMessages, readyForOutline, setReadyForOutline,
-    toneSettings, setToneSettings, bookStructure, setBookStructure,
+    toneSettings, setToneSettings, customStyles, setCustomStyles,
+    selectedCustomStyleId, setSelectedCustomStyleId, bookStructure, setBookStructure,
     subsectionContents, setSubsectionContents, factClaimsBySection, setFactClaimsBySection,
     progress, setProgress, coverImage, setCoverImage, coverConcepts, setCoverConcepts,
     coverPromptUsed, setCoverPromptUsed, currentTheme, setCurrentTheme,
@@ -51,7 +52,6 @@ export default function BookSmithAI() {
   // Local UI state
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showToneSelector, setShowToneSelector] = useState(true);
   const [isToneModalOpen, setIsToneModalOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -94,12 +94,13 @@ export default function BookSmithAI() {
 
   // Theme
   const theme = THEMES[currentTheme];
-  const isStudyTheme = currentTheme === 'study';
 
   // Book writing hook
   const bookWriting = useBookWriting({
     bookStructure,
     toneSettings,
+    customStyles,
+    selectedCustomStyleId,
     subsectionContents,
     setSubsectionContents,
     setProgress,
@@ -232,7 +233,11 @@ export default function BookSmithAI() {
     }
     
     try {
-      const tonePrompt = getTonePrompt(toneSettings);
+      // 선택된 커스텀 스타일 찾기
+      const selectedCustomStyle = selectedCustomStyleId 
+        ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
+        : null;
+      const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
       setMessages(prev => [...prev, { role: 'assistant' as const, content: '' }]);
 
       const finalResponse = await callGeminiStream(
@@ -494,7 +499,11 @@ ${historyText}`,
     setFeedbackChatMessages(next);
 
     try {
-      const tonePrompt = getTonePrompt(toneSettings);
+      // 선택된 커스텀 스타일 찾기
+      const selectedCustomStyle = selectedCustomStyleId 
+        ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
+        : null;
+      const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
       const history = [...feedbackChatMessages, userMsg];
 
       const finalResponse = await callGeminiStream(
@@ -790,8 +799,8 @@ ${historyText}`,
 
   return (
     <div className={`min-h-screen font-ui flex flex-col transition-colors duration-500 ${theme.text}`}>
-      {/* Background - Crystal 테마일 때 종이 텍스처 적용 */}
-      <div className={`fixed inset-0 -z-50 ${isStudyTheme ? 'paper-bg' : theme.bg}`} />
+      {/* Background */}
+      <div className={`fixed inset-0 -z-50 ${theme.bg}`} />
       <style>{`@media print { body * { visibility: hidden; } #printable-area, #printable-area * { visibility: visible; } #printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 2cm; } header, .sidebar-panel { display: none !important; } @page { margin: 2cm; size: auto; } }`}</style>
 
       {/* Modals */}
@@ -808,8 +817,7 @@ ${historyText}`,
       <FeedbackChatModal
         isOpen={isFeedbackChatOpen}
         onClose={() => setIsFeedbackChatOpen(false)}
-                      theme={theme}
-        currentTheme={currentTheme}
+        theme={theme}
         messages={feedbackChatMessages}
         input={feedbackChatInput}
         setInput={setFeedbackChatInput}
@@ -821,47 +829,31 @@ ${historyText}`,
       {/* Modification Modal */}
       {modifyingNode && bookStructure && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${
-            isStudyTheme 
-              ? 'crystal-card-lg' 
-              : `rounded-xl shadow-2xl border ${theme.panel} ${theme.border}`
-          }`}>
-            <h3 className={`font-bold text-lg mb-4 flex items-center gap-2 ${isStudyTheme ? 'text-ink-deep' : ''}`}>
-              <Wand2 className={isStudyTheme ? 'text-antique-gold' : theme.accent} size={20} /> 
+          <div className={`w-full max-w-md p-6 ${theme.card}`}>
+            <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-[#4A3B32]">
+              <Wand2 className="text-[#8C6B5D]" size={20} /> 
               AI 구조 변경
             </h3>
-            <p className={`text-sm mb-3 ${isStudyTheme ? 'text-ink-light' : 'opacity-70'}`}>
+            <p className="text-sm mb-3 text-[#8C6B5D]/70">
               {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
             </p>
             <textarea
               value={modificationInput}
               onChange={(e) => setModificationInput(e.target.value)}
-              className={`w-full h-28 p-3 text-sm mb-4 outline-none transition-all ${
-                isStudyTheme 
-                  ? 'crystal-input rounded-xl' 
-                  : `border rounded focus:ring-1 focus:ring-indigo-500 ${theme.input} ${theme.border} ${theme.text}`
-              }`}
+              className={`w-full h-28 p-3 text-sm mb-4 outline-none transition-all rounded-xl border ${theme.border} ${theme.input} ${theme.text}`}
               placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
             />
             <div className="flex justify-end gap-2.5">
               <button 
                 onClick={() => setModifyingNode(null)} 
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isStudyTheme 
-                    ? 'crystal-btn' 
-                    : 'hover:bg-black/10'
-                }`}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors hover:bg-[#D4C5A9]/50 text-[#4A3B32]"
               >
                 취소
               </button>
               <button 
                 onClick={submitModification} 
                 disabled={loading} 
-                className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all ${
-                  isStudyTheme 
-                    ? 'crystal-btn-primary' 
-                    : `text-white ${theme.button}`
-                }`}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all text-white ${theme.button}`}
               >
                 {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
               </button>
@@ -873,10 +865,6 @@ ${historyText}`,
       {/* Header */}
       <Header
         theme={theme}
-        currentTheme={currentTheme}
-        setCurrentTheme={setCurrentTheme}
-        showThemeSelector={showThemeSelector}
-        setShowThemeSelector={setShowThemeSelector}
         projects={projects}
         currentProjectId={currentProjectId}
         showProjectSelector={showProjectSelector}
@@ -900,41 +888,30 @@ ${historyText}`,
           className={`sidebar-panel flex flex-col min-h-[calc(100vh-100px)] gap-4 transition-all duration-500 ${step === 'interview'
             ? 'lg:col-span-12 max-w-3xl mx-auto w-full'
             : 'lg:col-span-4'
-          } ${step === 'done' ? 'hidden lg:flex' : ''} ${isStudyTheme ? 'text-ink-medium' : ''}`}
+          } ${step === 'done' ? 'hidden lg:flex' : ''}`}
         >
           {/* Step indicator */}
-          <div className={`flex items-center gap-1 p-1.5 rounded-xl text-xs ${
-            isStudyTheme 
-              ? 'crystal-card-flat' 
-              : `border ${theme.panel} ${theme.border}`
-          }`}>
+          <div className={`flex items-center gap-1 p-1.5 rounded-xl text-xs ${theme.cardFlat}`}>
             <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
               step === 'interview' 
-                ? isStudyTheme 
-                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
-                  : 'bg-indigo-500 text-white font-bold shadow-sm'
-                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
+                : 'text-[#8C6B5D]/40'
             }`}>1. 기획</div>
             <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
               step === 'outline' 
-                ? isStudyTheme 
-                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
-                  : 'bg-indigo-500 text-white font-bold shadow-sm'
-                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
+                : 'text-[#8C6B5D]/40'
             }`}>2. 구조</div>
             <div className={`flex-1 px-3 py-2 rounded-lg text-center transition-all font-medium ${
               (step === 'writing' || step === 'done') 
-                ? isStudyTheme 
-                  ? 'bg-gradient-to-r from-[var(--antique-gold)] to-[var(--antique-gold-dim)] text-white font-bold shadow-md' 
-                  : 'bg-indigo-500 text-white font-bold shadow-sm'
-                : isStudyTheme ? 'text-ink-muted' : 'opacity-40'
+                ? 'bg-[#8C6B5D] text-white font-bold shadow-sm' 
+                : 'text-[#8C6B5D]/40'
             }`}>3. 집필</div>
           </div>
 
           {step === 'interview' && (
             <InterviewPanel
               theme={theme}
-              currentTheme={currentTheme}
               messages={messages}
               input={input}
               setInput={setInput}
@@ -946,6 +923,11 @@ ${historyText}`,
               setToneSettings={setToneSettings}
               showToneSelector={showToneSelector}
               setShowToneSelector={setShowToneSelector}
+              customStyles={customStyles}
+              onAddCustomStyle={(style) => setCustomStyles((prev: CustomStyle[]) => [...prev, style])}
+              onDeleteCustomStyle={(id) => setCustomStyles((prev: CustomStyle[]) => prev.filter((s: CustomStyle) => s.id !== id))}
+              selectedCustomStyleId={selectedCustomStyleId}
+              onSelectCustomStyle={setSelectedCustomStyleId}
               onSendMessage={handleSendMessage}
               onGenerateOutline={generateOutline}
             />
@@ -954,7 +936,6 @@ ${historyText}`,
           {step === 'outline' && bookStructure && (
             <OutlinePanel
               theme={theme}
-              currentTheme={currentTheme}
               bookStructure={bookStructure}
               setBookStructure={setBookStructure}
               loading={loading}
@@ -1015,7 +996,6 @@ ${historyText}`,
         {/* Right Panel: Preview */}
         <PreviewPanel
           theme={theme}
-          currentTheme={currentTheme}
           step={step}
           bookStructure={bookStructure}
           subsectionContents={subsectionContents}

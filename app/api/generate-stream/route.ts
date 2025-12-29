@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash-preview-09-2025"
+            model: "gemini-2.5-flash"
         });
 
         // Create a streaming response

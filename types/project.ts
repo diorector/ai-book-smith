@@ -52,6 +52,32 @@ export interface CoverConcepts {
   recommendedId: number;
 }
 
+// 커스텀 문체 스타일
+export interface CustomStyleAnalysis {
+  // 레이더 차트 데이터 (0-100)
+  conciseness: number;      // 간결함 ↔ 만연체
+  formality: number;        // 격식 ↔ 친근함
+  emotionality: number;     // 이성적 ↔ 감성적
+  directness: number;       // 직설적 ↔ 우회적
+  humor: number;            // 진지함 ↔ 유머러스
+  // 키워드 태그
+  tags: string[];
+  // 샘플 문장
+  sampleGreeting: string;
+  sampleExplanation: string;
+}
+
+export interface CustomStyle {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  sourceText: string;       // 원본 텍스트 (요약본)
+  analysis: CustomStyleAnalysis;
+  prompt: string;           // 생성된 프롬프트
+  createdAt: number;
+}
+
 export interface ProjectState {
   step: string;
   messages: Message[];

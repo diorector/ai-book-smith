@@ -10,7 +10,6 @@ interface FeedbackChatModalProps {
   isOpen: boolean;
   onClose: () => void;
   theme: Theme;
-  currentTheme: string;
   messages: FeedbackChatMessage[];
   input: string;
   setInput: (input: string) => void;
@@ -23,7 +22,6 @@ export default function FeedbackChatModal({
   isOpen,
   onClose,
   theme,
-  currentTheme,
   messages,
   input,
   setInput,
@@ -37,12 +35,12 @@ export default function FeedbackChatModal({
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
       <div className={`w-full max-w-2xl rounded-xl shadow-2xl border overflow-hidden ${theme.panel} ${theme.border}`}>
         <div className={`p-3 border-b flex items-center justify-between ${theme.border}`}>
-          <div className="font-bold text-sm flex items-center gap-2">
-            <User size={16} className={theme.accent} /> 피드백 대화
+          <div className="font-bold text-sm flex items-center gap-2 text-[#4A3B32]">
+            <User size={16} className="text-[#8C6B5D]" /> 피드백 대화
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded hover:bg-black/10"
+            className="p-2 rounded hover:bg-[#D4C5A9]/50"
             title="닫기"
           >
             <X size={16} />
@@ -52,10 +50,10 @@ export default function FeedbackChatModal({
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${m.role === 'user'
-                ? `${theme.button} text-white rounded-tr-none`
-                : `${theme.panel} ${theme.text} rounded-tl-none border ${theme.border}`
+                ? 'bg-[#8C6B5D] text-white rounded-tr-none'
+                : 'bg-[#F5F1E8] text-[#4A3B32] rounded-tl-none border border-[#D4C5A9]'
               }`}>
-                <MarkdownRenderer text={m.content} theme={theme} currentTheme={currentTheme} />
+                <MarkdownRenderer text={m.content} theme={theme} />
               </div>
             </div>
           ))}
@@ -68,7 +66,7 @@ export default function FeedbackChatModal({
               onKeyDown={(e) => e.key === 'Enter' && onSend()}
               disabled={isLoading}
               placeholder="피드백을 적고 Enter..."
-              className={`flex-1 border rounded-lg px-3 py-2 outline-none ${theme.input} ${theme.border} ${theme.text}`}
+              className={`flex-1 border rounded-lg px-3 py-2 outline-none ${theme.input} ${theme.border} ${theme.text} focus:border-[#8C6B5D]`}
             />
             <button
               onClick={onSend}
@@ -80,7 +78,7 @@ export default function FeedbackChatModal({
             <button
               onClick={onFinalize}
               disabled={isLoading || messages.length < 2}
-              className={`px-3 py-2 rounded-lg font-bold border ${theme.border} hover:bg-black/5 disabled:opacity-50`}
+              className={`px-3 py-2 rounded-lg font-bold border ${theme.border} hover:bg-[#EBE5CE] disabled:opacity-50`}
               title="대화 내용을 지침으로 확정"
             >
               확정
@@ -94,4 +92,3 @@ export default function FeedbackChatModal({
     </div>
   );
 }
-

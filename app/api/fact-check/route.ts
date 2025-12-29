@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     
     // Google Search Grounding이 포함된 모델 설정
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-preview-05-20",
+      model: "gemini-2.5-flash",
       tools: [{
         googleSearch: {}
       }] as any,

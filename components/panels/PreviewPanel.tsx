@@ -10,7 +10,6 @@ import MarkdownRenderer from '../MarkdownRenderer';
 
 interface PreviewPanelProps {
   theme: Theme;
-  currentTheme: string;
   step: string;
   bookStructure: BookStructure | null;
   subsectionContents: Record<string, string>;
@@ -28,7 +27,6 @@ interface PreviewPanelProps {
 
 export default function PreviewPanel({
   theme,
-  currentTheme,
   step,
   bookStructure,
   subsectionContents,
@@ -59,7 +57,7 @@ export default function PreviewPanel({
         </div>
         <div className="flex items-center gap-3 text-xs opacity-50">
           {step === 'done' && (
-            <button onClick={onPrintPDF} className="flex items-center gap-1 hover:text-indigo-600 font-medium">
+            <button onClick={onPrintPDF} className="flex items-center gap-1 hover:text-[#8C6B5D] font-medium">
               <Printer size={12} /> 인쇄/PDF
             </button>
           )}
@@ -98,7 +96,7 @@ export default function PreviewPanel({
             <div className={`text-center py-24 border-b-2 mb-12 print:py-12 print:break-after-page ${theme.border}`}>
               <h1 className="text-5xl md:text-6xl font-bold mb-6 tracking-tight">{bookStructure.title}</h1>
               <p className="text-2xl italic opacity-70 leading-relaxed">{bookStructure.concept}</p>
-              <div className={`mt-8 flex justify-center gap-2 opacity-50 text-xs font-ui font-bold uppercase tracking-widest ${theme.accent}`}>
+              <div className="mt-8 flex justify-center gap-2 opacity-50 text-xs font-ui font-bold uppercase tracking-widest text-[#8C6B5D]">
                 <span>Written by AI Book Smith</span>
                 <span>•</span>
                 <span>{roleLabel}</span>
@@ -158,17 +156,17 @@ export default function PreviewPanel({
                       id={`section-${key}`}
                       className={`mb-12 subsection-block relative group scroll-mt-24 transition-all duration-500 ${
                         isHighlighted 
-                          ? 'ring-4 ring-amber-400/60 bg-amber-50/30 rounded-xl -mx-4 px-4 py-2 shadow-lg shadow-amber-200/50' 
+                          ? 'ring-4 ring-[#8C6B5D]/40 bg-[#8C6B5D]/10 rounded-xl -mx-4 px-4 py-2 shadow-lg shadow-[#8C6B5D]/20' 
                           : ''
                       }`}
                     >
                       <h3 className="text-xl font-bold opacity-90 mb-6 flex items-center gap-3 mt-8">
-                        <span className={`text-2xl font-normal select-none opacity-30 ${theme.accent}`}>§</span> {sub.title}
+                        <span className="text-2xl font-normal select-none opacity-30 text-[#8C6B5D]">§</span> {sub.title}
                       </h3>
 
                       {content ? (
                         <div className="prose prose-lg max-w-none prose-p:leading-loose">
-                          <MarkdownRenderer text={content} theme={theme} currentTheme={currentTheme} />
+                          <MarkdownRenderer text={content} theme={theme} />
                         </div>
                       ) : (
                         <div className="p-6 border border-dashed rounded text-center opacity-40 text-sm py-12 print:hidden">
@@ -191,4 +189,3 @@ export default function PreviewPanel({
     </div>
   );
 }
-

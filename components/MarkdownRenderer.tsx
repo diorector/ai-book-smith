@@ -6,10 +6,9 @@ import type { Theme } from '@/constants/themes';
 interface MarkdownRendererProps {
   text: string;
   theme: Theme;
-  currentTheme: string;
 }
 
-export default function MarkdownRenderer({ text, theme, currentTheme }: MarkdownRendererProps) {
+export default function MarkdownRenderer({ text, theme }: MarkdownRendererProps) {
   if (!text) return null;
 
   const parseInline = (src: string): React.ReactNode[] => {
@@ -73,14 +72,14 @@ export default function MarkdownRenderer({ text, theme, currentTheme }: Markdown
     elements.push(
       <div key={`table-${elements.length}`} className={`my-8 overflow-hidden border ${theme.border} rounded-sm`}>
         <table className="min-w-full text-sm text-left">
-          <thead className={`${currentTheme === 'deepSpace' ? 'bg-gray-800' : 'bg-slate-100'} ${theme.previewText} border-b-2 ${theme.border}`}>
+          <thead className={`bg-[#EBE5CE] ${theme.previewText} border-b-2 ${theme.border}`}>
             <tr>{headers.map((h, i) => <th key={i} className="px-6 py-3 font-bold tracking-wider uppercase">{parseInline(h)}</th>)}</tr>
           </thead>
-          <tbody className={`divide-y divide-slate-200 ${currentTheme === 'deepSpace' ? 'bg-black' : 'bg-white'}`}>
+          <tbody className="divide-y divide-[#D4C5A9] bg-[#FAF7F0]">
             {bodyRows.map((row, rIdx) => {
               const cells = row.split('|').filter(c => c.trim() !== '').map(c => c.trim());
               return (
-                <tr key={rIdx} className={`hover:bg-indigo-500/5 transition-colors ${theme.previewText}`}>
+                <tr key={rIdx} className={`hover:bg-[#EBE5CE]/50 transition-colors ${theme.previewText}`}>
                   {cells.map((c, cIdx) => <td key={cIdx} className="px-6 py-4 whitespace-pre-wrap leading-relaxed">{parseInline(c)}</td>)}
                 </tr>
               );
@@ -147,7 +146,7 @@ export default function MarkdownRenderer({ text, theme, currentTheme }: Markdown
       } else if (level === 2) {
         elements.push(<h2 key={i} className={`text-xl font-bold mt-8 mb-4 ${theme.previewText} border-b pb-1 ${theme.border}`}>{parseInline(content)}</h2>);
       } else if (level === 3) {
-        elements.push(<h3 key={i} className={`text-lg font-bold mt-6 mb-2 ${theme.previewText} flex items-center gap-2`}><span className={`opacity-40 text-xl select-none ${theme.accent}`}>§</span>{parseInline(content)}</h3>);
+        elements.push(<h3 key={i} className={`text-lg font-bold mt-6 mb-2 ${theme.previewText} flex items-center gap-2`}><span className="opacity-40 text-xl select-none text-[#8C6B5D]">§</span>{parseInline(content)}</h3>);
       } else {
         elements.push(<h4 key={i} className={`text-base font-bold mt-4 mb-2 ${theme.previewText} opacity-90`}>{parseInline(content)}</h4>);
       }
@@ -178,7 +177,7 @@ export default function MarkdownRenderer({ text, theme, currentTheme }: Markdown
     
     if (trimmedLine.startsWith('> ')) {
       elements.push(
-        <blockquote key={i} className={`my-6 pl-6 border-l-4 ${theme.accent.replace('text-', 'border-')} italic opacity-80 py-2 pr-2 rounded-r ${theme.previewText}`}>
+        <blockquote key={i} className={`my-6 pl-6 border-l-4 border-[#8C6B5D] italic opacity-80 py-2 pr-2 rounded-r ${theme.previewText}`}>
           {parseInline(cleanLine.replace(/^>\s?/, ''))}
         </blockquote>
       );
@@ -192,4 +191,3 @@ export default function MarkdownRenderer({ text, theme, currentTheme }: Markdown
   flushTable();
   return <>{elements}</>;
 }
-

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { deleteProjectState, getProjectState, migrateLocalStorageProjectStateIfNeeded, setProjectState } from '@/lib/projectStorage';
 import { PROJECTS_KEY } from '@/constants';
 import { generateProjectId } from '@/utils/helpers';
-import type { Project, ProjectState, Message, FeedbackChatMessage, Progress, AutoFactCheckProgress } from '@/types/project';
+import type { Project, ProjectState, Message, FeedbackChatMessage, Progress, AutoFactCheckProgress, CustomStyle } from '@/types/project';
 import type { BookStructure } from '@/types/book';
 import type { ToneSettings } from '@/constants/toneFactors';
 import type { ThemeKey } from '@/constants/themes';
@@ -37,6 +37,10 @@ interface UseProjectManagementReturn {
   setReadyForOutline: (ready: boolean) => void;
   toneSettings: ToneSettings;
   setToneSettings: (settings: ToneSettings) => void;
+  customStyles: CustomStyle[];
+  setCustomStyles: React.Dispatch<React.SetStateAction<CustomStyle[]>>;
+  selectedCustomStyleId: string | null;
+  setSelectedCustomStyleId: (id: string | null) => void;
   bookStructure: BookStructure | null;
   setBookStructure: (structure: BookStructure | null) => void;
   subsectionContents: Record<string, string>;
@@ -103,8 +107,12 @@ export function useProjectManagement(): UseProjectManagementReturn {
   const [toneSettings, setToneSettings] = useState<ToneSettings>({
     role: 'mentor',
     tone: 'warm',
-    style: 'concise'
+    style: 'concise',
+    authorPreset: 'none',
+    difficulty: 3
   });
+  const [customStyles, setCustomStyles] = useState<CustomStyle[]>([]);
+  const [selectedCustomStyleId, setSelectedCustomStyleId] = useState<string | null>(null);
   const [bookStructure, setBookStructure] = useState<BookStructure | null>(null);
   const [subsectionContents, setSubsectionContents] = useState<Record<string, string>>({});
   const [factClaimsBySection, setFactClaimsBySection] = useState<Record<string, FactClaim[]>>({});
@@ -113,7 +121,7 @@ export function useProjectManagement(): UseProjectManagementReturn {
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [coverConcepts, setCoverConcepts] = useState<CoverConcepts | null>(null);
   const [coverPromptUsed, setCoverPromptUsed] = useState('');
-  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('study');
+  const [currentTheme, setCurrentTheme] = useState<ThemeKey>('coffee');
   const [includeIntroOutro, setIncludeIntroOutro] = useState(false);
   const [isTestMode, setIsTestMode] = useState(true);
   const [writingFeedback, setWritingFeedback] = useState('');
@@ -310,6 +318,23 @@ export function useProjectManagement(): UseProjectManagementReturn {
   }, [projects]);
 
   const switchProject = useCallback((projectId: string) => {
+    // 먼저 상태를 초기화하고 프로젝트 전환
+    // (useEffect에서 새 프로젝트 데이터를 로드할 때까지 이전 데이터가 보이는 것을 방지)
+    setStep('interview');
+    setMessages([{ role: 'assistant', content: "안녕하세요! 어떤 책을 쓰고 싶으신가요? 책의 주제나 키워드를 알려주세요." }]);
+    setReadyForOutline(false);
+    setBookStructure(null);
+    setSubsectionContents({});
+    setFactClaimsBySection({});
+    setProgress({ total: 0, current: 0, status: 'idle' });
+    setCoverImage(null);
+    setCoverConcepts(null);
+    setCoverPromptUsed('');
+    setShowRecoveryBanner(false);
+    setAutoFactCheckProgress({ current: 0, total: 0, status: '' });
+    setFactCheckLogs({});
+    setTocExpandedChapters({});
+    
     setCurrentProjectId(projectId);
     localStorage.setItem('ai-book-smith-last-project', projectId);
     setShowProjectSelector(false);
@@ -388,6 +413,9 @@ export function useProjectManagement(): UseProjectManagementReturn {
     setShowFeedbackInput(false);
     setFeedbackChatMessages([defaultFeedbackMessage]);
     setFactCheckLogs({});
+    setShowRecoveryBanner(false);
+    setTocExpandedChapters({});
+    setShowDetailedToc(false);
   }
 
   const handleReset = useCallback(() => {
@@ -423,6 +451,10 @@ export function useProjectManagement(): UseProjectManagementReturn {
     setReadyForOutline,
     toneSettings,
     setToneSettings,
+    customStyles,
+    setCustomStyles,
+    selectedCustomStyleId,
+    setSelectedCustomStyleId,
     bookStructure,
     setBookStructure,
     subsectionContents,

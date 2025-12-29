@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
         }
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-exp" });
 
         const systemPrompt = `
     당신은 사용자의 집필을 돕는 페르소나입니다.
