@@ -2,6 +2,8 @@
 
 import React from 'react';
 import { Sliders } from 'lucide-react';
+import type { Theme } from '@/constants/themes';
+import type { ToneSettings } from '@/constants/toneFactors';
 
 interface ToneFactor {
     id: string;
@@ -11,34 +13,15 @@ interface ToneFactor {
     visual?: string;
 }
 
-interface ToneSettings {
-    role: string;
-    tone: string;
-    style: string;
-}
-
-interface Theme {
-    name: string;
-    bg: string;
-    text: string;
-    panel: string;
-    border: string;
-    input: string;
-    accent: string;
-    button: string;
-    previewBg: string;
-    previewText: string;
-}
-
 interface ToneSelectorProps {
     toneSettings: ToneSettings;
-    setToneSettings: React.Dispatch<React.SetStateAction<ToneSettings>>;
+    setToneSettings: (settings: ToneSettings) => void;
     theme: Theme;
     onClose?: () => void;
     TONE_FACTORS: {
-        roles: ToneFactor[];
-        tones: ToneFactor[];
-        styles: ToneFactor[];
+        roles: readonly ToneFactor[];
+        tones: readonly ToneFactor[];
+        styles: readonly ToneFactor[];
     };
 }
 
@@ -71,7 +54,7 @@ export default function ToneSelector({
                         {TONE_FACTORS.roles.map(t => (
                             <button
                                 key={t.id}
-                                onClick={() => setToneSettings(p => ({ ...p, role: t.id }))}
+                                onClick={() => setToneSettings({ ...toneSettings, role: t.id as ToneSettings['role'] })}
                                 className={`text-xs p-2 rounded border text-left transition-colors ${toneSettings.role === t.id
                                         ? `${theme.button} border-transparent`
                                         : `hover:bg-black/5 ${theme.border}`
@@ -89,7 +72,7 @@ export default function ToneSelector({
                         {TONE_FACTORS.tones.map(t => (
                             <button
                                 key={t.id}
-                                onClick={() => setToneSettings(p => ({ ...p, tone: t.id }))}
+                                onClick={() => setToneSettings({ ...toneSettings, tone: t.id as ToneSettings['tone'] })}
                                 className={`text-xs p-2 rounded border text-left transition-colors ${toneSettings.tone === t.id
                                         ? `${theme.button} border-transparent`
                                         : `hover:bg-black/5 ${theme.border}`
@@ -107,7 +90,7 @@ export default function ToneSelector({
                         {TONE_FACTORS.styles.map(t => (
                             <button
                                 key={t.id}
-                                onClick={() => setToneSettings(p => ({ ...p, style: t.id }))}
+                                onClick={() => setToneSettings({ ...toneSettings, style: t.id as ToneSettings['style'] })}
                                 className={`text-xs p-2 rounded border text-left transition-colors ${toneSettings.style === t.id
                                         ? `${theme.button} border-transparent`
                                         : `hover:bg-black/5 ${theme.border}`
