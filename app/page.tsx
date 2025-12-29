@@ -259,9 +259,9 @@ export default function BookSmithAI() {
         
         if (cleanName) {
           updateProjectName(cleanName);
-        }
-      }
-    } catch (e) {
+                }
+              }
+            } catch (e) {
       console.error("프로젝트 이름 추출 실패:", e);
     }
   };
@@ -432,15 +432,15 @@ export default function BookSmithAI() {
       let errorMessage = "알 수 없는 오류가 발생했습니다.";
       
       if (e instanceof Error) {
-        if (e.name === 'AbortError' || e.message?.includes('aborted')) {
-          errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
+      if (e.name === 'AbortError' || e.message?.includes('aborted')) {
+        errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
         } else {
-          errorMessage = e.message;
+        errorMessage = e.message;
         }
       }
       
       console.error("이미지 생성 오류:", e);
-      alert(`이미지 생성 실패\n\n${errorMessage}\n\n브라우저 콘솔을 확인해주세요.`);
+          alert(`이미지 생성 실패\n\n${errorMessage}\n\n브라우저 콘솔을 확인해주세요.`);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       setGeneratingCover(false);
@@ -776,7 +776,7 @@ export default function BookSmithAI() {
       <FeedbackChatModal
         isOpen={isFeedbackChatOpen}
         onClose={() => setIsFeedbackChatOpen(false)}
-        theme={theme}
+                      theme={theme}
         currentTheme={currentTheme}
         messages={feedbackChatMessages}
         input={feedbackChatInput}
@@ -789,28 +789,28 @@ export default function BookSmithAI() {
       {/* Modification Modal */}
       {modifyingNode && bookStructure && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md rounded-xl shadow-2xl p-6 ${theme.panel} ${theme.border} border`}>
-            <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-              <Wand2 className={theme.accent} size={20} /> AI 구조 변경
-            </h3>
-            <p className="text-sm opacity-70 mb-2">
-              {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
-            </p>
-            <textarea
-              value={modificationInput}
-              onChange={(e) => setModificationInput(e.target.value)}
-              className={`w-full h-24 border rounded p-2 text-sm mb-4 outline-none focus:ring-1 focus:ring-indigo-500 ${theme.input} ${theme.border} ${theme.text}`}
-              placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
-            />
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setModifyingNode(null)} className="px-4 py-2 rounded text-sm hover:bg-black/10">취소</button>
-              <button onClick={submitModification} disabled={loading} className={`px-4 py-2 rounded text-sm text-white flex items-center gap-2 ${theme.button}`}>
-                {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                  <div className={`w-full max-w-md rounded-xl shadow-2xl p-6 ${theme.panel} ${theme.border} border`}>
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                      <Wand2 className={theme.accent} size={20} /> AI 구조 변경
+                    </h3>
+                    <p className="text-sm opacity-70 mb-2">
+                      {modifyingNode.type === 'chapter' ? '챕터' : '소제목'} 내용을 어떻게 바꿀까요?
+                    </p>
+                    <textarea
+                      value={modificationInput}
+                      onChange={(e) => setModificationInput(e.target.value)}
+                      className={`w-full h-24 border rounded p-2 text-sm mb-4 outline-none focus:ring-1 focus:ring-indigo-500 ${theme.input} ${theme.border} ${theme.text}`}
+                      placeholder="예: '경제학적 관점으로 다시 써줘' 또는 '제목을 더 자극적으로 바꿔줘'"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setModifyingNode(null)} className="px-4 py-2 rounded text-sm hover:bg-black/10">취소</button>
+                      <button onClick={submitModification} disabled={loading} className={`px-4 py-2 rounded text-sm text-white flex items-center gap-2 ${theme.button}`}>
+                        {loading ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />} 적용하기
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
       {/* Header */}
       <Header
@@ -849,7 +849,7 @@ export default function BookSmithAI() {
             <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${step === 'interview' ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>1. 기획</div>
             <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${step === 'outline' ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>2. 구조</div>
             <div className={`flex-1 px-3 py-1.5 rounded-md text-center transition-all ${(step === 'writing' || step === 'done') ? 'bg-indigo-500 text-white font-bold shadow-sm' : 'opacity-40'}`}>3. 집필</div>
-          </div>
+              </div>
 
           {step === 'interview' && (
             <InterviewPanel
@@ -914,10 +914,10 @@ export default function BookSmithAI() {
               onResetWriting={resetWritingKeepOutline}
               onContinueWithFeedback={bookWriting.continueWritingWithFeedback}
               onFinishWithoutFeedback={() => {
-                setShowFeedbackInput(false);
-                setProgress(prev => ({ ...prev, status: 'done' }));
-                setStep('done');
-              }}
+                        setShowFeedbackInput(false);
+                        setProgress(prev => ({ ...prev, status: 'done' }));
+                        setStep('done');
+                      }}
               onOpenFeedbackChat={() => setIsFeedbackChatOpen(true)}
               onResetFeedbackChat={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
               onGenerateCoverConcepts={handleGenerateCoverConcepts}
@@ -931,7 +931,7 @@ export default function BookSmithAI() {
               setShowRecoveryBanner={setShowRecoveryBanner}
             />
           )}
-        </div>
+                      </div>
 
         {/* Right Panel: Preview */}
         <PreviewPanel
