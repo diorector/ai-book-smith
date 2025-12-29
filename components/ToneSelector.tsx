@@ -398,7 +398,7 @@ export default function ToneSelector({
                         </button>
                       </div>
                       <p className="text-xs text-[var(--ink-light)] leading-relaxed line-clamp-3">
-                        {selectedCustomStyle.sampleText.slice(0, 150)}...
+                        {selectedCustomStyle.sourceText.slice(0, 150)}...
                       </p>
                     </div>
                   )}
