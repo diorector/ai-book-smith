@@ -71,7 +71,7 @@ export default function BookSmithAI() {
   const [modificationInput, setModificationInput] = useState('');
   const [highlightedSectionKey, setHighlightedSectionKey] = useState<string | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  
+
   // 팩트체크(교열) 상태
   const [factCheckStatus, setFactCheckStatus] = useState<{
     status: 'idle' | 'checking' | 'done';
@@ -132,7 +132,7 @@ export default function BookSmithAI() {
             ids.push({ key, top: (el as HTMLElement).offsetTop || 0 });
           });
         });
-      } catch {}
+      } catch { }
       ids.sort((a, b) => a.top - b.top);
       return ids;
     };
@@ -195,12 +195,12 @@ export default function BookSmithAI() {
     const key = `${chapterNumber}_${subNumber}`;
     const el = document.getElementById(`section-${key}`);
     const container = previewScrollRef.current;
-    
+
     if (el && container) {
       const containerRect = container.getBoundingClientRect();
       const elRect = el.getBoundingClientRect();
       const scrollTop = container.scrollTop + (elRect.top - containerRect.top) - 80;
-      
+
       container.scrollTo({ top: scrollTop, behavior: 'smooth' });
       setHighlightedSectionKey(key);
       setTimeout(() => setHighlightedSectionKey(null), 2500);
@@ -230,14 +230,14 @@ export default function BookSmithAI() {
     setMessages(newMessages);
     setInput('');
     setLoading(true);
-    
+
     if (messages.filter(m => m.role === 'user').length === 0) {
-      extractProjectName(input, newMessages).catch(() => {});
+      extractProjectName(input, newMessages).catch(() => { });
     }
-    
+
     try {
-      const selectedCustomStyle = selectedCustomStyleId 
-        ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
+      const selectedCustomStyle = selectedCustomStyleId
+        ? customStyles.find(s => s.id === selectedCustomStyleId) || null
         : null;
       const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
       setMessages(prev => [...prev, { role: 'assistant' as const, content: '' }]);
@@ -279,10 +279,10 @@ export default function BookSmithAI() {
 출력은 이름만 출력하세요. 설명이나 다른 텍스트는 포함하지 마세요.
 
 사용자 메시지: "${userMessage}"`;
-        
+
         const projectName = await callGemini(prompt);
         const cleanName = projectName.trim().replace(/^["']|["']$/g, '').substring(0, 20);
-        
+
         if (cleanName) {
           updateProjectName(cleanName);
         }
@@ -306,7 +306,7 @@ ${includeIntroOutro ? "반드시 책의 맨 앞에는 '서문(Prologue)'을, 맨
 ${historyText}`,
         SYSTEM_PROMPTS.architect
       );
-      
+
       const extractFirstJsonObject = (src: string): string | null => {
         if (!src) return null;
         // 코드블록 우선 제거
@@ -338,13 +338,21 @@ ${historyText}`,
         return null;
       };
 
-      let jsonStr = extractFirstJsonObject(response);
+      const jsonStr = extractFirstJsonObject(response);
       if (!jsonStr) {
         console.error("JSON 추출 실패. 원본 응답:", response);
         throw new Error("응답에서 JSON 객체를 찾을 수 없습니다. 다시 시도해 주세요.");
       }
-      let parsed;
-      
+      type OutlineJson = Record<string, unknown> & {
+        title?: unknown;
+        chapters?: Array<Record<string, unknown> & {
+          chapter_number?: unknown;
+          title?: unknown;
+          subsections?: Array<Record<string, unknown> & { sub_number?: unknown; title?: unknown }>;
+        }>;
+      };
+      let parsed: OutlineJson | undefined;
+
       const cleaningStrategies = [
         (s: string) => s,
         (s: string) => s.replace(/,(\s*[\]}])/g, '$1'),
@@ -354,11 +362,11 @@ ${historyText}`,
           .replace(/,(\s*[\]}])/g, '$1')
           .replace(/:\s*"([^"]*)"([^,}\]]*)"([^"]*?)"/g, ': "$1\\"$2\\"$3"'),
       ];
-      
+
       for (let i = 0; i < cleaningStrategies.length; i++) {
         try {
           const cleaned = cleaningStrategies[i](jsonStr);
-          parsed = JSON.parse(cleaned);
+          parsed = JSON.parse(cleaned) as OutlineJson;
           break;
         } catch (e) {
           if (i === cleaningStrategies.length - 1) {
@@ -367,28 +375,27 @@ ${historyText}`,
           }
         }
       }
-      
+
       if (!parsed || !parsed.chapters) {
         throw new Error("목차 구조가 올바르지 않습니다. chapters 배열이 없습니다.");
       }
 
       // 최소 보정: 번호 누락/타입 불일치 정리
       if (Array.isArray(parsed.chapters)) {
-        parsed.chapters = parsed.chapters.map((c: any, idx: number) => ({
-          ...c,
-          chapter_number: typeof c.chapter_number === 'number' ? c.chapter_number : idx + 1,
-          subsections: Array.isArray(c.subsections)
-            ? c.subsections.map((s: any, sIdx: number) => ({
-                ...s,
-                sub_number: typeof s.sub_number === 'number' ? s.sub_number : sIdx + 1,
-              }))
-            : [],
-        }));
+        parsed.chapters = parsed.chapters.map((c, idx) => {
+          const chapter_number = typeof c.chapter_number === 'number' ? c.chapter_number : idx + 1;
+          const subsectionsRaw = Array.isArray(c.subsections) ? c.subsections : [];
+          const subsections = subsectionsRaw.map((s, sIdx) => ({
+            ...s,
+            sub_number: typeof s.sub_number === 'number' ? s.sub_number : sIdx + 1,
+          }));
+          return { ...c, chapter_number, subsections };
+        });
       }
-        
-      setBookStructure(parsed);
+
+      setBookStructure(parsed as unknown as BookStructure);
       setStep('outline');
-      
+
       if (parsed.title) {
         updateProjectName(parsed.title.substring(0, 30));
       }
@@ -478,20 +485,20 @@ ${historyText}`,
 
   const handleGenerateCoverImage = async (option: CoverConcept) => {
     if (!option?.promptEnglish) return;
-    
+
     setGeneratingCover(true);
     setGeneratingCoverOptionId(option.id);
-    
+
     const controller = new AbortController();
     let timeoutId: NodeJS.Timeout | null = null;
-    
+
     try {
       timeoutId = setTimeout(() => {
         controller.abort();
       }, 60000);
 
       const imageUrl = await generateImage(option.promptEnglish, controller.signal);
-      
+
       setCoverImage(imageUrl);
       setCoverPromptUsed(option.promptEnglish);
       setIsCoverModalOpen(false);
@@ -499,7 +506,7 @@ ${historyText}`,
       saveProjectState();
     } catch (e: unknown) {
       let errorMessage = "알 수 없는 오류가 발생했습니다.";
-      
+
       if (e instanceof Error) {
         if (e.name === 'AbortError' || e.message?.includes('aborted')) {
           errorMessage = "요청 시간이 초과되었습니다. 네트워크 연결을 확인하고 다시 시도해주세요.";
@@ -507,7 +514,7 @@ ${historyText}`,
           errorMessage = e.message;
         }
       }
-      
+
       console.error("이미지 생성 오류:", e);
       alert(`이미지 생성 실패\n\n${errorMessage}`);
     } finally {
@@ -528,8 +535,8 @@ ${historyText}`,
     setFeedbackChatMessages(next);
 
     try {
-      const selectedCustomStyle = selectedCustomStyleId 
-        ? customStyles.find(s => s.id === selectedCustomStyleId) || null 
+      const selectedCustomStyle = selectedCustomStyleId
+        ? customStyles.find(s => s.id === selectedCustomStyleId) || null
         : null;
       const tonePrompt = getTonePrompt(toneSettings, selectedCustomStyle);
       const history = [...feedbackChatMessages, userMsg];
@@ -616,18 +623,18 @@ ${historyText}`,
   // 원고 다듬기 (교정 + 윤문)
   const handleProofread = async () => {
     if (!bookStructure) return;
-    
-    const keys = Object.keys(subsectionContents).filter(k => 
+
+    const keys = Object.keys(subsectionContents).filter(k =>
       subsectionContents[k] && subsectionContents[k].length > 100
     );
-    
+
     if (keys.length === 0) {
       setProofreadStatus({ status: 'done', current: 0, total: 0, changes: 0, changesList: [] });
       return;
     }
 
     setProofreadStatus({ status: 'proofreading', current: 0, total: keys.length, changes: 0, changesList: [] });
-    
+
     let totalChanges = 0;
     const allChanges: Array<{ original: string; corrected: string; reason: string; type?: string }> = [];
 
@@ -637,7 +644,7 @@ ${historyText}`,
 
       try {
         const result = await proofread(subsectionContents[key], 'full');
-        
+
         if (result.changes && result.changes.length > 0) {
           totalChanges += result.changes.length;
           allChanges.push(...result.changes);
@@ -654,11 +661,11 @@ ${historyText}`,
   // 수동 팩트체크 (교열)
   const handleManualFactCheck = async () => {
     if (!bookStructure) return;
-    
-    const keys = Object.keys(subsectionContents).filter(k => 
+
+    const keys = Object.keys(subsectionContents).filter(k =>
       subsectionContents[k] && subsectionContents[k].length > 200
     );
-    
+
     if (keys.length === 0) {
       setFactCheckStatus({ status: 'done', current: 0, total: 0, changes: 0, changesList: [] });
       return;
@@ -675,20 +682,20 @@ ${historyText}`,
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'),
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js')
       ]);
-      
+
       // @ts-expect-error - JSZip is loaded dynamically
       const JSZip = window.JSZip;
       // @ts-expect-error - saveAs is loaded dynamically
       const saveAs = window.saveAs;
-      
+
       const zip = new JSZip();
       const title = bookStructure.title;
       const author = "AI Book Smith";
       const uuid = "urn:uuid:" + new Date().getTime();
-      
+
       zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
       zip.folder("META-INF").file("container.xml", `<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`);
-      
+
       const oebps = zip.folder("OEBPS");
       let manifestItems = "", spineItems = "", navMapItems = "";
       let playOrder = 1;
@@ -702,7 +709,7 @@ ${historyText}`,
         manifestItems += `<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n`;
         spineItems += `<itemref idref="cover"/>\n`;
       }
-      
+
       const titlePageContent = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${title}</title></head><body><div style="text-align:center; margin-top: 20%;"><h1>${title}</h1><h3>${bookStructure.concept}</h3><p>Generated by AI Book Smith</p></div></body></html>`;
       oebps.file("title.xhtml", titlePageContent);
       manifestItems += `<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>\n`;
@@ -729,10 +736,10 @@ ${historyText}`,
 
       const contentOpf = `<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf"><dc:title>${title}</dc:title><dc:creator opf:role="aut">${author}</dc:creator><dc:language>ko</dc:language><dc:identifier id="BookId" opf:scheme="UUID">${uuid}</dc:identifier>${coverImage ? '<meta name="cover" content="cover-image"/>' : ''}</metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>${manifestItems}</manifest><spine toc="ncx">${spineItems}</spine></package>`;
       oebps.file("content.opf", contentOpf);
-      
+
       const tocNcx = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd"><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uuid}"/><meta name="dtb:depth" content="1"/><meta name="dtb:totalPageCount" content="0"/><meta name="dtb:maxPageNumber" content="0"/></head><docTitle><text>${title}</text></docTitle><navMap>${navMapItems}</navMap></ncx>`;
       oebps.file("toc.ncx", tocNcx);
-      
+
       const blob = await zip.generateAsync({ type: "blob" });
       saveAs(blob, `${title.replace(/\s+/g, '_')}.epub`);
     } catch (error: unknown) {
@@ -794,7 +801,7 @@ ${historyText}`,
           const key = `${ch.chapter_number}_${sub.sub_number}`;
           const rawContent = subsectionContents[key] || '';
           children.push(new Paragraph({ text: `§ ${safeText(sub.title)}`, heading: HeadingLevel.HEADING_2 }));
-          
+
           const clean = safeText(rawContent).replace(/\$\$/g, '').replace(/\\text\{([^}]+)\}/g, '$1').replace(/\\[a-zA-Z]+/g, '');
           clean.split(/\n\n+/).forEach((block) => {
             const trimmed = block.trim();
@@ -823,7 +830,7 @@ ${historyText}`,
   const canShowDetailedToc = !!bookStructure && (progress.status === 'done' || progress.status === 'test-complete' || step === 'done');
 
   const currentProject = projects.find(p => p.id === currentProjectId);
-  
+
   return (
     <div className="min-h-screen flex bg-[var(--paper)] text-[var(--ink)]">
       {/* Sidebar - Hidden on mobile, shown on md+ */}
@@ -842,7 +849,7 @@ ${historyText}`,
         isMobileOpen={isMobileSidebarOpen}
         onMobileClose={() => setIsMobileSidebarOpen(false)}
       />
-      
+
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Modals */}
@@ -886,15 +893,15 @@ ${historyText}`,
                 placeholder="예: '더 실용적인 관점으로' 또는 '제목을 더 명확하게'"
               />
               <div className="flex justify-end gap-2">
-                <button 
-                  onClick={() => setModifyingNode(null)} 
+                <button
+                  onClick={() => setModifyingNode(null)}
                   className="px-4 py-2 rounded text-sm font-medium text-[var(--ink-muted)] hover:text-[var(--ink)] hover:bg-[var(--stone)] transition-colors"
                 >
                   취소
                 </button>
-                <button 
-                  onClick={submitModification} 
-                  disabled={loading} 
+                <button
+                  onClick={submitModification}
+                  disabled={loading}
                   className="px-4 py-2 rounded text-sm font-medium bg-[var(--ink)] text-white hover:bg-[var(--ink-light)] transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
                   {loading ? <Loader2 className="animate-spin" size={14} /> : null}
@@ -913,118 +920,120 @@ ${historyText}`,
           onMenuClick={() => setIsMobileSidebarOpen(true)}
         />
 
-      {/* Main Content */}
-      <main className="flex-1 px-3 sm:px-4 md:px-6 py-4 sm:py-6 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
-        {/* Left Panel */}
-        <div
-          ref={leftPanelRef}
-          className={`sidebar-panel flex flex-col min-h-[calc(100vh-120px)] gap-5 ${
-            step === 'interview'
-              ? 'lg:col-span-12 max-w-2xl mx-auto w-full'
-              : 'lg:col-span-4'
-          } ${step === 'done' ? 'hidden lg:flex' : ''}`}
-        >
-          {step === 'interview' && (
-            <InterviewPanel
-              theme={theme}
-              messages={messages}
-              input={input}
-              setInput={setInput}
-              loading={loading}
-              readyForOutline={readyForOutline}
-              includeIntroOutro={includeIntroOutro}
-              setIncludeIntroOutro={setIncludeIntroOutro}
-              toneSettings={toneSettings}
-              setToneSettings={setToneSettings}
-              showToneSelector={showToneSelector}
-              onConfirmStyle={() => setHasConfirmedStyle(true)}
-              customStyles={customStyles}
-              onAddCustomStyle={(style) => setCustomStyles((prev: CustomStyle[]) => [...prev, style])}
-              onDeleteCustomStyle={(id) => setCustomStyles((prev: CustomStyle[]) => prev.filter((s: CustomStyle) => s.id !== id))}
-              selectedCustomStyleId={selectedCustomStyleId}
-              onSelectCustomStyle={setSelectedCustomStyleId}
-              onSendMessage={handleSendMessage}
-              onGenerateOutline={generateOutline}
-            />
-          )}
+        {/* Main Content */}
+        <main className="flex-1 px-3 sm:px-4 md:px-6 py-4 sm:py-6 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
+          {/* Left Panel */}
+          <div
+            ref={leftPanelRef}
+            className={`sidebar-panel flex flex-col min-h-[calc(100vh-120px)] gap-5 ${step === 'interview'
+                ? 'lg:col-span-12 max-w-2xl mx-auto w-full'
+                : 'lg:col-span-4'
+              } ${step === 'done' ? 'hidden lg:flex' : ''}`}
+          >
+            {step === 'interview' && (
+              <InterviewPanel
+                theme={theme}
+                messages={messages}
+                input={input}
+                setInput={setInput}
+                loading={loading}
+                readyForOutline={readyForOutline}
+                includeIntroOutro={includeIntroOutro}
+                setIncludeIntroOutro={setIncludeIntroOutro}
+                toneSettings={toneSettings}
+                setToneSettings={setToneSettings}
+                showToneSelector={showToneSelector}
+                onConfirmStyle={() => setHasConfirmedStyle(true)}
+                customStyles={customStyles}
+                onAddCustomStyle={(style) => setCustomStyles((prev: CustomStyle[]) => [...prev, style])}
+                onDeleteCustomStyle={(id) => setCustomStyles((prev: CustomStyle[]) => prev.filter((s: CustomStyle) => s.id !== id))}
+                selectedCustomStyleId={selectedCustomStyleId}
+                onSelectCustomStyle={setSelectedCustomStyleId}
+                onSendMessage={handleSendMessage}
+                onGenerateOutline={generateOutline}
+              />
+            )}
 
-          {step === 'outline' && bookStructure && (
-            <OutlinePanel
-              theme={theme}
-              bookStructure={bookStructure}
-              setBookStructure={setBookStructure}
-              loading={loading}
-              coverConceptsLoading={coverConceptsLoading}
-              generatingCover={generatingCover}
-              onStartWriting={bookWriting.startDeepWriting}
-              onGenerateCoverConcepts={handleGenerateCoverConcepts}
-              onModifyNode={openModificationModal}
-              onDeleteNode={handleDeleteNode}
-            />
-          )}
+            {step === 'outline' && bookStructure && (
+              <OutlinePanel
+                theme={theme}
+                bookStructure={bookStructure}
+                setBookStructure={setBookStructure}
+                loading={loading}
+                coverConceptsLoading={coverConceptsLoading}
+                generatingCover={generatingCover}
+                onStartWriting={bookWriting.startDeepWriting}
+                onGenerateCoverConcepts={handleGenerateCoverConcepts}
+                onModifyNode={openModificationModal}
+                onDeleteNode={handleDeleteNode}
+              />
+            )}
 
-          {(step === 'writing' || step === 'done' || progress.status === 'test-complete') && bookStructure && (
-            <WritingProgressPanel
-              theme={theme}
-              step={step}
-              bookStructure={bookStructure}
-              subsectionContents={subsectionContents}
-              progress={progress}
-              isTestMode={isTestMode}
-              factCheckStatus={factCheckStatus}
-              proofreadStatus={proofreadStatus}
-              showRecoveryBanner={showRecoveryBanner}
-              showFeedbackInput={showFeedbackInput}
-              writingFeedback={writingFeedback}
-              setWritingFeedback={setWritingFeedback}
-              activeSectionKey={activeSectionKey}
-              tocExpandedChapters={tocExpandedChapters}
-              setTocExpandedChapters={setTocExpandedChapters}
-              exporting={exporting}
-              showExportDropdown={showExportDropdown}
-              setShowExportDropdown={setShowExportDropdown}
-              coverConceptsLoading={coverConceptsLoading}
-              generatingCover={generatingCover}
-              onStopWriting={bookWriting.stopWriting}
-              onResumeWriting={bookWriting.resumeDeepWriting}
-              onResetWriting={resetWritingKeepOutline}
-              onContinueWithFeedback={bookWriting.continueWritingWithFeedback}
-              onFinishWithoutFeedback={() => {
-                setShowFeedbackInput(false);
-                setProgress(prev => ({ ...prev, status: 'done' }));
-                setStep('done');
-              }}
-              onOpenFeedbackChat={() => setIsFeedbackChatOpen(true)}
-              onResetFeedbackChat={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
-              onGenerateCoverConcepts={handleGenerateCoverConcepts}
-              onJumpToSection={jumpToSection}
-              onExportEPUB={handleExportEPUB}
-              onExportDOCX={handleExportDOCX}
-              onExportMarkdown={downloadBook}
-              onPrintPDF={handlePrintPDF}
-              onProofread={handleProofread}
-              setShowRecoveryBanner={setShowRecoveryBanner}
-            />
-          )}
-        </div>
+            {(step === 'writing' || step === 'done' || progress.status === 'test-complete') && bookStructure && (
+              <WritingProgressPanel
+                theme={theme}
+                step={step}
+                bookStructure={bookStructure}
+                subsectionContents={subsectionContents}
+                progress={progress}
+                isTestMode={isTestMode}
+                factCheckStatus={factCheckStatus}
+                proofreadStatus={proofreadStatus}
+                showRecoveryBanner={showRecoveryBanner}
+                showFeedbackInput={showFeedbackInput}
+                writingFeedback={writingFeedback}
+                setWritingFeedback={setWritingFeedback}
+                activeSectionKey={activeSectionKey}
+                tocExpandedChapters={tocExpandedChapters}
+                setTocExpandedChapters={setTocExpandedChapters}
+                exporting={exporting}
+                showExportDropdown={showExportDropdown}
+                setShowExportDropdown={setShowExportDropdown}
+                coverConceptsLoading={coverConceptsLoading}
+                generatingCover={generatingCover}
+                onStopWriting={bookWriting.stopWriting}
+                onResumeWriting={bookWriting.resumeDeepWriting}
+                onResetWriting={resetWritingKeepOutline}
+                onContinueWithFeedback={bookWriting.continueWritingWithFeedback}
+                onFinishWithoutFeedback={() => {
+                  setShowFeedbackInput(false);
+                  setProgress(prev => ({ ...prev, status: 'done' }));
+                  setStep('done');
+                }}
+                onOpenFeedbackChat={() => setIsFeedbackChatOpen(true)}
+                onResetFeedbackChat={() => setFeedbackChatMessages([{ role: 'assistant', content: '샘플 원고를 보고 느낀 점을 알려주세요. (문체/구성/깊이/예시/독자 난이도 등)' }])}
+                onGenerateCoverConcepts={handleGenerateCoverConcepts}
+                onJumpToSection={jumpToSection}
+                onExportEPUB={handleExportEPUB}
+                onExportDOCX={handleExportDOCX}
+                onExportMarkdown={downloadBook}
+                onPrintPDF={handlePrintPDF}
+                onProofread={handleProofread}
+                setShowRecoveryBanner={setShowRecoveryBanner}
+              />
+            )}
+          </div>
 
-        {/* Right Panel: Preview */}
-        <PreviewPanel
-          theme={theme}
-          step={step}
-          bookStructure={bookStructure}
-          subsectionContents={subsectionContents}
-          coverImage={coverImage}
-          setCoverImage={setCoverImage}
-          toneSettings={toneSettings}
-          progress={progress}
-          leftPanelHeight={leftPanelHeight}
-          previewScrollRef={previewScrollRef as React.RefObject<HTMLDivElement>}
-          tocModel={buildTocModel(bookStructure)}
-          onJumpToSection={jumpToSection}
-          onPrintPDF={handlePrintPDF}
-          highlightedSectionKey={highlightedSectionKey}
-        />
+          {/* Right Panel: Preview */}
+          <PreviewPanel
+            theme={theme}
+            step={step}
+            bookStructure={bookStructure}
+            subsectionContents={subsectionContents}
+            coverImage={coverImage}
+            setCoverImage={setCoverImage}
+            toneSettings={toneSettings}
+            progress={progress}
+            leftPanelHeight={leftPanelHeight}
+            previewScrollRef={previewScrollRef as React.RefObject<HTMLDivElement>}
+            tocModel={buildTocModel(bookStructure)}
+            onJumpToSection={jumpToSection}
+            onPrintPDF={handlePrintPDF}
+            highlightedSectionKey={highlightedSectionKey}
+            onUpdateContent={(key, content) => {
+              setSubsectionContents(prev => ({ ...prev, [key]: content }));
+            }}
+          />
         </main>
       </div>
     </div>

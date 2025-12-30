@@ -27,7 +27,7 @@ type CoverConceptResponse = {
   recommendedId: "A" | "B" | "C";
 };
 
-function tryParseJsonObject(text: string): any | null {
+function tryParseJsonObject(text: string): unknown | null {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
@@ -37,12 +37,16 @@ function tryParseJsonObject(text: string): any | null {
   }
 }
 
-function ensureValidResponse(parsed: any): CoverConceptResponse {
+function ensureValidResponse(parsed: unknown): CoverConceptResponse {
   if (!parsed || typeof parsed !== "object") throw new Error("Invalid response");
-  if (!Array.isArray(parsed.options) || parsed.options.length !== 3) {
+  const obj = parsed as Partial<CoverConceptResponse>;
+  if (!Array.isArray(obj.options) || obj.options.length !== 3) {
     throw new Error("Model did not return 3 options");
   }
-  return parsed as CoverConceptResponse;
+  if (obj.recommendedId !== "A" && obj.recommendedId !== "B" && obj.recommendedId !== "C") {
+    throw new Error("Invalid recommendedId");
+  }
+  return obj as CoverConceptResponse;
 }
 
 export async function POST(req: NextRequest) {

@@ -57,17 +57,24 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const data = await response.json();
+        const data: unknown = await response.json();
 
         // Find first inlineData image
-        if (!data?.candidates || data.candidates.length === 0) {
+        if (
+            !data ||
+            typeof data !== 'object' ||
+            !('candidates' in data) ||
+            !Array.isArray((data as { candidates?: unknown }).candidates) ||
+            (data as { candidates: unknown[] }).candidates.length === 0
+        ) {
             return NextResponse.json(
                 { error: "Gemini API가 응답 후보를 반환하지 않았습니다. 프롬프트를 수정하거나 다시 시도해주세요." },
                 { status: 500 }
             );
         }
 
-        const parts = data.candidates[0]?.content?.parts ?? [];
+        const firstCandidate = (data as { candidates: Array<{ content?: { parts?: unknown } }> }).candidates[0];
+        const parts = Array.isArray(firstCandidate?.content?.parts) ? firstCandidate.content!.parts : [];
         if (parts.length === 0) {
             return NextResponse.json(
                 { error: "Gemini API 응답에 이미지 데이터가 없습니다. 프롬프트를 확인해주세요." },
@@ -75,7 +82,12 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const imagePart = parts.find((p: any) => p?.inlineData?.data);
+        const imagePart = parts.find((p: unknown) => {
+            if (!p || typeof p !== 'object') return false;
+            const inlineData = (p as { inlineData?: unknown }).inlineData;
+            if (!inlineData || typeof inlineData !== 'object') return false;
+            return typeof (inlineData as { data?: unknown }).data === 'string';
+        });
         if (!imagePart) {
             return NextResponse.json(
                 { error: "이미지 데이터를 찾을 수 없습니다. 응답 형식이 예상과 다릅니다." },
@@ -83,8 +95,9 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const base64 = imagePart.inlineData?.data;
-        const mimeType = imagePart.inlineData?.mimeType || "image/png";
+        const inlineData = (imagePart as { inlineData?: { data?: unknown; mimeType?: unknown } }).inlineData;
+        const base64 = typeof inlineData?.data === 'string' ? inlineData.data : "";
+        const mimeType = typeof inlineData?.mimeType === 'string' ? inlineData.mimeType : "image/png";
 
         if (!base64) {
             return NextResponse.json(

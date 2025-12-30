@@ -15,8 +15,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "GEMINI_API_KEY not configured" }, { status: 500 });
     }
 
-    const body = await req.json();
-    const manuscript = (body?.manuscript || "").toString().trim();
+    const body: unknown = await req.json();
+    const manuscriptRaw =
+      (body && typeof body === 'object' && 'manuscript' in body)
+        ? (body as { manuscript?: unknown }).manuscript
+        : "";
+    const manuscript = (manuscriptRaw ?? "").toString().trim();
     
     if (!manuscript) {
       return NextResponse.json({ error: "manuscript is required" }, { status: 400 });
@@ -36,9 +40,7 @@ export async function POST(req: NextRequest) {
     // Google Search Grounding이 포함된 모델 설정
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
-      tools: [{
-        googleSearch: {}
-      }] as any,
+      tools: ([{ googleSearch: {} }] as unknown) as Array<{ googleSearch: Record<string, never> }>,
     });
 
     const systemPrompt = `당신은 전문 팩트체커입니다.
@@ -94,7 +96,7 @@ export async function POST(req: NextRequest) {
     let parsed;
     try {
       // 마크다운 코드 펜스 제거
-      let jsonStr = responseText
+      const jsonStr = responseText
         .replace(/```json\s*/gi, "")
         .replace(/```\s*/g, "")
         .trim();
@@ -116,10 +118,10 @@ export async function POST(req: NextRequest) {
       summary: parsed.summary || "팩트체크 완료"
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[fact-check] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Fact check failed" },
+      { error: error instanceof Error ? error.message : "Fact check failed" },
       { status: 500 }
     );
   }

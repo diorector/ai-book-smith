@@ -149,7 +149,7 @@ export async function POST(req: NextRequest) {
     
     let parsed;
     try {
-      let jsonStr = responseText
+      const jsonStr = responseText
         .replace(/```json\s*/gi, "")
         .replace(/```\s*/g, "")
         .trim();
@@ -170,10 +170,10 @@ export async function POST(req: NextRequest) {
       summary: parsed.summary || "원고 다듬기 완료"
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[proofread] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Proofread failed" },
+      { error: error instanceof Error ? error.message : "Proofread failed" },
       { status: 500 }
     );
   }

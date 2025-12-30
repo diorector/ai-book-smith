@@ -1,4 +1,10 @@
-export type ProjectState = any;
+import type { ProjectState } from "@/types/project";
+
+type ProjectStateRecord = {
+  id: string;
+  state: ProjectState;
+  updatedAt: number;
+};
 
 const DB_NAME = "book-smith";
 const DB_VERSION = 1;
@@ -34,14 +40,18 @@ function tx<T>(
 
 export async function getProjectState(projectId: string): Promise<ProjectState | null> {
   const db = await openDb();
-  const record = await tx<any>(db, "readonly", (store) => store.get(projectId));
-  return record?.state ?? null;
+  const record = await tx<unknown>(db, "readonly", (store) => store.get(projectId));
+  const state =
+    record && typeof record === "object" && "state" in record
+      ? (record as { state?: unknown }).state
+      : null;
+  return (state as ProjectState) ?? null;
 }
 
 export async function setProjectState(projectId: string, state: ProjectState): Promise<void> {
   const db = await openDb();
   await tx(db, "readwrite", (store) =>
-    store.put({ id: projectId, state, updatedAt: Date.now() })
+    store.put({ id: projectId, state, updatedAt: Date.now() } satisfies ProjectStateRecord)
   );
 }
 

@@ -6,8 +6,6 @@ import type { Theme } from '@/constants/themes';
 import type { BookStructure, TocChapter } from '@/types/book';
 import type { ToneSettings } from '@/constants/toneFactors';
 import { TONE_FACTORS } from '@/constants/toneFactors';
-import MarkdownRenderer from '../MarkdownRenderer';
-
 interface PreviewPanelProps {
   theme: Theme;
   step: string;
@@ -23,7 +21,239 @@ interface PreviewPanelProps {
   onJumpToSection: (chapterNumber: number, subNumber: number) => void;
   onPrintPDF: () => void;
   highlightedSectionKey?: string | null;
+  onUpdateContent?: (key: string, content: string) => void;
 }
+
+import { useEditor, EditorContent } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import { Markdown } from 'tiptap-markdown';
+import { Table } from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
+import Placeholder from '@tiptap/extension-placeholder';
+import { Bold, Italic, List, Heading1, Heading2, Heading3, Quote, Table as TableIcon } from 'lucide-react';
+
+// Tiptap Editor Component
+const TiptapEditor = ({
+  content,
+  onUpdate,
+  sectionKey,
+}: {
+  content: string;
+  onUpdate: (content: string) => void;
+  sectionKey: string;
+}) => {
+  const [localContent, setLocalContent] = React.useState(content);
+  const [showBubbleMenu, setShowBubbleMenu] = React.useState(false);
+  const [showFloatingMenu, setShowFloatingMenu] = React.useState(false);
+  const [menuPosition, setMenuPosition] = React.useState({ top: 0, left: 0 });
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        heading: {
+          levels: [1, 2, 3],
+        },
+      }),
+      Markdown.configure({
+        html: false,
+        transformPastedText: true,
+        transformCopiedText: true,
+      }),
+      Table.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      Placeholder.configure({
+        placeholder: '내용을 입력하세요...',
+      }),
+    ],
+    content,
+    editorProps: {
+      attributes: {
+        class: 'manuscript-preview focus:outline-none min-h-[50px] p-2 -m-2 rounded hover:bg-[var(--stone-light)] transition-colors',
+      },
+    },
+    onUpdate: ({ editor }) => {
+      const storage = editor.storage as unknown as { markdown?: { getMarkdown?: () => string } };
+      const markdown = storage.markdown?.getMarkdown?.() ?? "";
+      setLocalContent(markdown);
+    },
+    onSelectionUpdate: ({ editor }) => {
+      const { from, to } = editor.state.selection;
+      const hasSelection = from !== to;
+
+      if (hasSelection) {
+        setShowBubbleMenu(true);
+        setShowFloatingMenu(false);
+
+        // Calculate menu position
+        const { view } = editor;
+        const start = view.coordsAtPos(from);
+        const end = view.coordsAtPos(to);
+        const editorRect = view.dom.getBoundingClientRect();
+
+        setMenuPosition({
+          top: start.top - editorRect.top - 50,
+          left: (start.left + end.left) / 2 - editorRect.left,
+        });
+      } else {
+        setShowBubbleMenu(false);
+
+        // Check if current line is empty for floating menu
+        const { $from } = editor.state.selection;
+        const isEmptyLine = $from.parent.textContent.length === 0;
+        setShowFloatingMenu(isEmptyLine);
+
+        if (isEmptyLine) {
+          const { view } = editor;
+          const coords = view.coordsAtPos(from);
+          const editorRect = view.dom.getBoundingClientRect();
+
+          setMenuPosition({
+            top: coords.top - editorRect.top,
+            left: -60,
+          });
+        }
+      }
+    },
+    immediatelyRender: false,
+  }, [sectionKey]);
+
+  // Debounced update to parent
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localContent !== content) {
+        onUpdate(localContent);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [localContent, onUpdate, content]);
+
+  // Effect to sync editor content if changed externally
+  React.useEffect(() => {
+    const storage = editor?.storage as unknown as { markdown?: { getMarkdown?: () => string } } | undefined;
+    const current = storage?.markdown?.getMarkdown?.() ?? "";
+    if (editor && content !== current && !editor.isFocused) {
+      editor.commands.setContent(content);
+    }
+  }, [content, editor]);
+
+  if (!editor) {
+    return null;
+  }
+
+  return (
+    <div className="relative">
+      {/* Bubble Menu - appears when text is selected */}
+      {showBubbleMenu && (
+        <div
+          className="absolute z-50 animate-in fade-in duration-100"
+          style={{
+            top: `${menuPosition.top}px`,
+            left: `${menuPosition.left}px`,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className="flex items-center gap-0.5 bg-[var(--ink)] text-white p-1 rounded-lg shadow-xl border border-white/10">
+            <button
+              onClick={() => editor.chain().focus().toggleBold().run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('bold') ? 'bg-white/20' : ''}`}
+              title="굵게 (Ctrl+B)"
+            >
+              <Bold size={14} />
+            </button>
+            <button
+              onClick={() => editor.chain().focus().toggleItalic().run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('italic') ? 'bg-white/20' : ''}`}
+              title="기울임 (Ctrl+I)"
+            >
+              <Italic size={14} />
+            </button>
+            <div className="w-px h-4 bg-white/20 mx-0.5" />
+            <button
+              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('heading', { level: 1 }) ? 'bg-white/20' : ''}`}
+              title="대제목"
+            >
+              <Heading1 size={14} />
+            </button>
+            <button
+              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('heading', { level: 2 }) ? 'bg-white/20' : ''}`}
+              title="중제목"
+            >
+              <Heading2 size={14} />
+            </button>
+            <button
+              onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('heading', { level: 3 }) ? 'bg-white/20' : ''}`}
+              title="소제목"
+            >
+              <Heading3 size={14} />
+            </button>
+            <div className="w-px h-4 bg-white/20 mx-0.5" />
+            <button
+              onClick={() => editor.chain().focus().toggleBulletList().run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('bulletList') ? 'bg-white/20' : ''}`}
+              title="목록"
+            >
+              <List size={14} />
+            </button>
+            <button
+              onClick={() => editor.chain().focus().toggleBlockquote().run()}
+              className={`p-1.5 rounded hover:bg-white/20 transition-colors ${editor.isActive('blockquote') ? 'bg-white/20' : ''}`}
+              title="인용구"
+            >
+              <Quote size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Menu - appears on empty lines */}
+      {showFloatingMenu && (
+        <div
+          className="absolute z-50 animate-in fade-in duration-100"
+          style={{
+            top: `${menuPosition.top}px`,
+            left: `${menuPosition.left}px`,
+          }}
+        >
+          <div className="flex items-center gap-0.5 bg-white p-1 rounded-lg shadow-lg border border-[var(--stone)]">
+            <button
+              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+              className="p-1.5 rounded hover:bg-[var(--stone-light)] text-[var(--ink-muted)] flex items-center gap-1.5 px-2"
+            >
+              <Heading1 size={14} />
+              <span className="text-[10px] font-medium">대제목</span>
+            </button>
+            <button
+              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+              className="p-1.5 rounded hover:bg-[var(--stone-light)] text-[var(--ink-muted)] flex items-center gap-1.5 px-2"
+            >
+              <Heading2 size={14} />
+              <span className="text-[10px] font-medium">중제목</span>
+            </button>
+            <button
+              onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+              className="p-1.5 rounded hover:bg-[var(--stone-light)] text-[var(--ink-muted)] flex items-center gap-1.5 px-2"
+            >
+              <TableIcon size={14} />
+              <span className="text-[10px] font-medium">표 삽입</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <EditorContent editor={editor} />
+    </div>
+  );
+};
 
 export default function PreviewPanel({
   theme,
@@ -40,6 +270,7 @@ export default function PreviewPanel({
   onJumpToSection,
   onPrintPDF,
   highlightedSectionKey,
+  onUpdateContent,
 }: PreviewPanelProps) {
   if (step === 'interview') return null;
 
@@ -58,8 +289,8 @@ export default function PreviewPanel({
         </div>
         <div className="flex items-center gap-4 text-xs text-[var(--ink-muted)]">
           {step === 'done' && (
-            <button 
-              onClick={onPrintPDF} 
+            <button
+              onClick={onPrintPDF}
               className="flex items-center gap-1.5 hover:text-[var(--ink)] transition-colors"
             >
               <Printer size={12} />
@@ -85,9 +316,9 @@ export default function PreviewPanel({
                   className="shadow-lg rounded overflow-hidden w-72 md:w-96 border border-[var(--stone)] relative group"
                   style={{ aspectRatio: '2 / 3' }}
                 >
-                  <img 
-                    src={coverImage} 
-                    alt="Book Cover" 
+                  <img
+                    src={coverImage}
+                    alt="Book Cover"
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       console.error("이미지 로딩 실패:", e);
@@ -169,16 +400,15 @@ export default function PreviewPanel({
                   const key = `${ch.chapter_number}_${sub.sub_number}`;
                   const content = subsectionContents[key];
                   const isHighlighted = highlightedSectionKey === key;
-                  
+
                   return (
                     <div
                       key={sub.sub_number}
                       id={`section-${key}`}
-                      className={`mb-12 subsection-block scroll-mt-24 transition-all duration-300 ${
-                        isHighlighted 
-                          ? 'bg-[var(--accent-light)] -mx-6 px-6 py-4 rounded border-l-2 border-[var(--accent)]' 
-                          : ''
-                      }`}
+                      className={`mb-12 subsection-block scroll-mt-24 transition-all duration-300 ${isHighlighted
+                        ? 'bg-[var(--accent-light)] -mx-6 px-6 py-4 rounded border-l-2 border-[var(--accent)]'
+                        : ''
+                        }`}
                     >
                       <h3 className="text-lg font-medium text-[var(--ink)] mb-6 flex items-center gap-2 font-display">
                         <span className="text-[var(--ink-faint)]">§</span>
@@ -186,8 +416,12 @@ export default function PreviewPanel({
                       </h3>
 
                       {content ? (
-                        <div className="prose prose-lg max-w-none text-[var(--ink-light)] leading-relaxed">
-                          <MarkdownRenderer text={content} theme={theme} />
+                        <div className="relative group">
+                          <TiptapEditor
+                            content={content}
+                            onUpdate={(newMarkdown) => onUpdateContent?.(key, newMarkdown)}
+                            sectionKey={key}
+                          />
                         </div>
                       ) : (
                         <div className="py-12 text-center text-sm text-[var(--ink-faint)] border border-dashed border-[var(--stone)] rounded print:hidden">

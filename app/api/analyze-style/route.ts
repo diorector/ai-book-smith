@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
     // JSON 파싱
     let parsed;
     try {
-      let jsonStr = responseText
+      const jsonStr = responseText
         .replace(/```json\s*/gi, "")
         .replace(/```\s*/g, "")
         .trim();

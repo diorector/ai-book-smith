@@ -28,7 +28,7 @@ export function sanitizeManuscript(text: string, opts?: { sectionTitle?: string 
   const sectionTitle = (opts?.sectionTitle || "").trim();
 
   // 1) Remove common meta/length markers anywhere
-  let t = text
+  const t = text
     // Remove patterns like (공백 포함 2,105자), (2,105자), (공백 제외 1,500자)
     .replace(/\(\s*(공백\s*[포함제외]\s*)?\d[\d,]*\s*자\s*\)/g, "")
     // Remove standalone patterns like 2,105자, 공백 포함 2,105자

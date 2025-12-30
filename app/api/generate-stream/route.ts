@@ -13,9 +13,25 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const { prompt, messages, systemInstruction = "", generationConfig } = await req.json();
+        const body: unknown = await req.json();
+        const prompt =
+            (body && typeof body === 'object' && 'prompt' in body)
+                ? (body as { prompt?: unknown }).prompt
+                : undefined;
+        const messages =
+            (body && typeof body === 'object' && 'messages' in body)
+                ? (body as { messages?: unknown }).messages
+                : undefined;
+        const systemInstruction =
+            (body && typeof body === 'object' && 'systemInstruction' in body)
+                ? (body as { systemInstruction?: unknown }).systemInstruction
+                : "";
+        const generationConfig =
+            (body && typeof body === 'object' && 'generationConfig' in body)
+                ? (body as { generationConfig?: unknown }).generationConfig
+                : undefined;
 
-        if (!prompt && (!messages || messages.length === 0)) {
+        if (typeof prompt !== 'string' && (!Array.isArray(messages) || messages.length === 0)) {
             return new Response(
                 JSON.stringify({ error: "Prompt or messages are required" }),
                 { status: 400, headers: { "Content-Type": "application/json" } }
@@ -32,23 +48,31 @@ export async function POST(req: NextRequest) {
         const stream = new ReadableStream({
             async start(controller) {
                 try {
-                    let contents = [];
-                    if (messages && messages.length > 0) {
-                        contents = messages.map((m: any) => ({
-                            role: m.role === 'assistant' ? 'model' : 'user',
-                            parts: [{ text: m.content }]
-                        }));
+                    let contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+                    if (Array.isArray(messages) && messages.length > 0) {
+                        contents = messages
+                            .map((m: unknown) => {
+                                if (!m || typeof m !== 'object') return null;
+                                const role = (m as { role?: unknown }).role;
+                                const content = (m as { content?: unknown }).content;
+                                if (typeof content !== 'string') return null;
+                                return {
+                                    role: role === 'assistant' ? 'model' : 'user',
+                                    parts: [{ text: content }],
+                                };
+                            })
+                            .filter((v): v is { role: string; parts: Array<{ text: string }> } => !!v);
                     } else {
-                        contents = [{ role: "user", parts: [{ text: prompt }] }];
+                        contents = [{ role: "user", parts: [{ text: typeof prompt === 'string' ? prompt : "" }] }];
                     }
 
                     const result = await model.generateContentStream({
                         contents,
-                        systemInstruction: systemInstruction ? {
+                        systemInstruction: typeof systemInstruction === 'string' && systemInstruction.trim() ? {
                             role: "system",
                             parts: [{ text: systemInstruction }]
                         } : undefined,
-                        generationConfig,
+                        generationConfig: (typeof generationConfig === 'object' ? generationConfig : undefined) as unknown,
                     });
 
                     for await (const chunk of result.stream) {

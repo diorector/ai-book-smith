@@ -53,10 +53,10 @@ export async function POST(req: NextRequest) {
         const refinedText = response.text();
 
         return NextResponse.json({ refinedText });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Polishing Error:', error);
         return NextResponse.json(
-            { error: error.message || 'Failed to polish text' },
+            { error: error instanceof Error ? error.message : 'Failed to polish text' },
             { status: 500 }
         );
     }

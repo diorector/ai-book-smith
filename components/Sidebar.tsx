@@ -59,7 +59,7 @@ export default function Sidebar({
       <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--ink-faint)] px-2 py-2">
         프로젝트
       </div>
-      
+
       {projects.length === 0 ? (
         <div className="px-3 py-6 text-center text-xs text-[var(--ink-muted)]">
           프로젝트가 없습니다
@@ -76,9 +76,8 @@ export default function Sidebar({
                 key={project.id}
                 onMouseEnter={() => setHoveredProjectId(project.id)}
                 onMouseLeave={() => setHoveredProjectId(null)}
-                className={`group relative rounded transition-colors ${
-                  isActive ? 'bg-[var(--stone)]' : 'hover:bg-[var(--stone)]'
-                }`}
+                className={`group relative rounded transition-colors ${isActive ? 'bg-[var(--stone)]' : 'hover:bg-[var(--stone)]'
+                  }`}
               >
                 {isEditing ? (
                   <div className="flex items-center gap-1 p-1.5">
@@ -108,12 +107,19 @@ export default function Sidebar({
                     </button>
                   </div>
                 ) : (
-                  <button
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onProjectClick(project.id)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        onProjectClick(project.id);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left cursor-pointer outline-none focus:bg-[var(--stone)]"
                   >
                     <div className="flex-1 min-w-0">
-                      <div 
+                      <div
                         className={`text-sm truncate ${isActive ? 'font-medium text-[var(--ink)]' : 'text-[var(--ink-light)]'}`}
                         title={project.name}
                       >
@@ -126,7 +132,7 @@ export default function Sidebar({
                         })}
                       </div>
                     </div>
-                    
+
                     {/* Actions */}
                     {(isHovered || isActive) && (
                       <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
@@ -152,7 +158,7 @@ export default function Sidebar({
                         </button>
                       </div>
                     )}
-                  </button>
+                  </div>
                 )}
               </div>
             );
@@ -175,7 +181,7 @@ export default function Sidebar({
           >
             <BookOpen size={20} />
           </button>
-          
+
           <button
             onClick={createNewProject}
             className="w-10 h-10 rounded-xl border border-[var(--stone-dark)] flex items-center justify-center text-[var(--ink-muted)] hover:bg-[var(--stone)] hover:text-[var(--ink)] transition-all"
@@ -206,9 +212,8 @@ export default function Sidebar({
       )}
       {/* Sidebar */}
       <div
-        className={`fixed top-0 left-0 h-full w-64 bg-[var(--paper-warm)] border-r border-[var(--stone)] flex-col z-50 transform transition-transform duration-300 ease-out md:hidden print:hidden ${
-          isMobileOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        className={`fixed top-0 left-0 h-full w-64 bg-[var(--paper-warm)] border-r border-[var(--stone)] flex-col z-50 transform transition-transform duration-300 ease-out md:hidden print:hidden ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
       >
         {/* Mobile Header */}
         <div className="p-4 flex items-center justify-between border-b border-[var(--stone)]">
@@ -251,7 +256,7 @@ export default function Sidebar({
     <>
       {mobileOverlay}
       <div className="hidden md:flex w-64 min-h-screen bg-[var(--paper-warm)] border-r border-[var(--stone)] flex-col print:hidden sticky top-0">
-      {/* Header */}
+        {/* Header */}
         <div className="p-4 flex items-center justify-between border-b border-[var(--stone)]">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-[var(--ink)] rounded flex items-center justify-center">
